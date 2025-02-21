@@ -11,9 +11,10 @@ import argparse
 from utils import rgb_to_grayscale, visualize_images, generate_edge_label
 
 # 导入三个模型（确保models文件夹中存在对应模块）
-from models.Unet import UNet
-from models.CannyUnet import CannyUNet
-from models.EdgeUnet import EdgeUNet
+from models.Unet import Unet
+from models.EdgeUnet import EdgeUnet
+from models.UnetPlusPlus import UnetPlusPlus
+
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -32,7 +33,7 @@ def save_mask(tensor, save_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "cannyunet", "edgeunet"],
+    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
     parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_epoch_100.pth", help="模型权重文件路径")
@@ -55,11 +56,11 @@ if __name__ == '__main__':
 
     # 根据模型类型选择模型
     if args.model_type == "unet":
-        model = UNet(in_channels=3, out_channels=1)
-    elif args.model_type == "cannyunet":
-        model = CannyUNet(in_channels=3, out_channels=1)
+        model = Unet(in_channels=3, out_channels=1)
     elif args.model_type == "edgeunet":
-        model = EdgeUNet(in_channels=3, out_channels=1)
+        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "unet++":
+        model = UnetPlusPlus(in_channels=3, out_channels=1)
     else:
         raise ValueError("Unsupported model type")
     model.to(device)

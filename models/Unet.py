@@ -1,9 +1,9 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-class UNet(nn.Module):
+class Unet(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(UNet, self).__init__()
+        super(Unet, self).__init__()
 
         # 模型名称
         self.name = "unet"

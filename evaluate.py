@@ -11,9 +11,9 @@ import argparse
 from datetime import datetime
 
 # 导入模型（确保 models 文件夹中有对应模块）
-from models.Unet import UNet
-from models.CannyUnet import CannyUNet
-from models.EdgeUnet import EdgeUNet
+from models.Unet import Unet
+from models.EdgeUnet import EdgeUnet
+from models.UnetPlusPlus import UnetPlusPlus
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -116,9 +116,11 @@ def evaluate(model, dataloader, device):
 
     return pixel_accuracy, precision, recall, f1_score, iou, dice, miou, avg_boundary_f1
 
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate segmentation model and output metrics")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "cannyunet", "edgeunet"],
+    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
@@ -139,11 +141,11 @@ if __name__ == '__main__':
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
     if args.model_type == "unet":
-        model = UNet(in_channels=3, out_channels=1)
-    elif args.model_type == "cannyunet":
-        model = CannyUNet(in_channels=3, out_channels=1)  # 根据实际情况调整通道数
+        model = Unet(in_channels=3, out_channels=1)
     elif args.model_type == "edgeunet":
-        model = EdgeUNet(in_channels=3, out_channels=1)
+        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "unet++":
+        model = UnetPlusPlus(in_channels=3, out_channels=1)
     else:
         raise ValueError("Unsupported model type")
     model.to(device)

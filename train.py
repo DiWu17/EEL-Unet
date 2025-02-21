@@ -11,9 +11,10 @@ import numpy as np
 
 from utils import rgb_to_grayscale, visualize_images, generate_edge_label
 # 导入你三个模型（确保你的models文件夹中有对应模块）
-from models.Unet import UNet
-from models.CannyUnet import CannyUNet
-from models.EdgeUnet import EdgeUNet
+from models.Unet import Unet
+from models.EdgeUnet import EdgeUnet
+from models.UnetPlusPlus import UnetPlusPlus
+
 from models.Loss import BoundaryLoss, NormalizedChamferLoss
 
 # 导入你的数据集和数据增强（请根据实际情况调整）
@@ -70,9 +71,14 @@ def train(model, train_loader, val_loader, criterion, optimizer, device, num_epo
 
                 loss = seg_loss + lambda_edge * edge_loss
 
-            else:
+            elif model.name == "unet":
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
+            elif model.name == "unet++":
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+            else:
+                raise ValueError("Unsupported model type")
 
             loss.backward()
             optimizer.step()
@@ -124,7 +130,7 @@ def train(model, train_loader, val_loader, criterion, optimizer, device, num_epo
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train segmentation model with edge supervision")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "cannyunet", "edgeunet"],
+    parser.add_argument("--model_type", type=str, default="unet++", choices=["unet", "unet++", "edgeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
     parser.add_argument("--split", type=str, default="train", help="数据集划分，比如 train 或 test")
@@ -157,11 +163,11 @@ if __name__ == '__main__':
 
     # 根据命令行选择模型
     if args.model_type == "unet":
-        model = UNet(in_channels=3, out_channels=1)
-    elif args.model_type == "cannyunet":
-        model = CannyUNet(in_channels=3, out_channels=1)
+        model = Unet(in_channels=3, out_channels=1)
     elif args.model_type == "edgeunet":
-        model = EdgeUNet(in_channels=3, out_channels=1)
+        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "unet++":
+        model = UnetPlusPlus(in_channels=3, out_channels=1)
     else:
         raise ValueError("Unsupported model type")
 
@@ -175,8 +181,8 @@ if __name__ == '__main__':
 
     # 损失函数与优化器
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    # optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
+    # optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
 
     train(model, train_loader, val_loader, criterion, optimizer, device,
           num_epochs=args.epochs, save_dir=args.save_dir, log_dir=args.log_dir, lambda_edge=args.lambda_edge)

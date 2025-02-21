@@ -226,9 +226,9 @@ def extract_edges_torch(binary_mask):
 
     return edges
 
-class EdgeUNet(nn.Module):
+class EdgeUnet(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(EdgeUNet, self).__init__()
+        super(EdgeUnet, self).__init__()
 
         # 模型名称
         self.name = "edgeunet"
