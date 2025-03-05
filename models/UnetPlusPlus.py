@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class UNetPlusPlus(nn.Module):
+class UnetPlusPlus(nn.Module):
     def __init__(self, in_channels=1, out_channels=1):
-        super(UNetPlusPlus, self).__init__()
+        super(UnetPlusPlus, self).__init__()
 
         # 编码器部分 (Encoder)
         self.enc1 = self.conv_block(in_channels, 64)
@@ -84,7 +84,7 @@ class UNetPlusPlus(nn.Module):
 
 # Example of how to use
 if __name__ == "__main__":
-    model = UNetPlusPlus(in_channels=1, out_channels=1)
+    model = UnetPlusPlus(in_channels=1, out_channels=1)
     x = torch.randn(1, 1, 256, 256)  # Example input tensor
     output = model(x)
     print(output.shape)  # Expected to be [1, 1, 256, 256]

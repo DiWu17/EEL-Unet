@@ -21,6 +21,95 @@ def compute_distance_map(target_np):
     # 对边界的反集（即非边界区域）计算距离变换
     d_map = distance_transform_edt(~boundary)
     return d_map
+
+
+class DiceLoss(nn.Module):
+    def __init__(self):
+        super(DiceLoss, self).__init__()
+
+    def forward(self, pred, target):
+        smooth = 1
+        size = pred.size(0)
+
+        pred_ = pred.view(size, -1)
+        target_ = target.view(size, -1)
+        intersection = pred_ * target_
+        dice_score = (2 * intersection.sum(1) + smooth)/(pred_.sum(1) + target_.sum(1) + smooth)
+        dice_loss = 1 - dice_score.sum()/size
+
+        return dice_loss
+
+
+class BCELoss(nn.Module):
+    def __init__(self):
+        super(BCELoss, self).__init__()
+        self.bceloss = nn.BCELoss()
+
+    def forward(self, pred, target):
+        size = pred.size(0)
+        pred_ = pred.view(size, -1)
+        target_ = target.view(size, -1)
+
+        return self.bceloss(pred_, target_)
+
+
+
+class BceDiceLoss(nn.Module):
+    def __init__(self, wb=1, wd=1):
+        super(BceDiceLoss, self).__init__()
+        self.bce = BCELoss()
+        self.dice = DiceLoss()
+        self.wb = wb
+        self.wd = wd
+
+    def forward(self, pred, target):
+        # print(pred.size(), target.size())
+        bceloss = self.bce(pred, target)
+        diceloss = self.dice(pred, target)
+
+        loss = self.wd * diceloss + self.wb * bceloss
+        return loss
+
+
+class GT_BceDiceLoss(nn.Module):
+    def __init__(self, wb=1, wd=1):
+        super(GT_BceDiceLoss, self).__init__()
+        self.bcedice = BceDiceLoss(wb, wd)
+
+    def forward(self, gt_pre, out, target):
+        bcediceloss = self.bcedice(out, target)
+        gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
+        gt_loss = self.bcedice(gt_pre5, target) * 0.1 + \
+                  self.bcedice(gt_pre4, target) * 0.2 + \
+                  self.bcedice(gt_pre3, target) * 0.3 + \
+                  self.bcedice(gt_pre2, target) * 0.4 + \
+                  self.bcedice(gt_pre1, target) * 0.5
+        return bcediceloss + gt_loss
+
+class edge_bacediceloss(nn.Module):
+    def __init__(self, wb=1, wd=1):
+        super(GT_BceDiceLoss, self).__init__()
+        self.bcedice = BceDiceLoss(wb, wd)
+
+    def forward(self, gt_pre, out, target):
+        bcediceloss = self.bcedice(out, target)
+        gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
+
+        target_5 = F.max_pool2d(target, kernel_size=16, stride=16)
+        target_4 = F.max_pool2d(target, kernel_size=8, stride=8)
+        target_3 = F.max_pool2d(target, kernel_size=4, stride=4)
+        target_2 = F.max_pool2d(target, kernel_size=2, stride=2)
+        target_1 = target
+
+        gt_loss = self.bcedice(gt_pre5, target_5) * 0.1 + \
+                  self.bcedice(gt_pre4, target_4) * 0.2 + \
+                  self.bcedice(gt_pre3, target_3) * 0.3 + \
+                  self.bcedice(gt_pre2, target_2) * 0.4 + \
+                  self.bcedice(gt_pre1, target_1) * 0.5
+        return bcediceloss + gt_loss
+
+
+
 class BoundaryLoss(nn.Module):
     def __init__(self):
         """
@@ -60,34 +149,34 @@ class BoundaryLoss(nn.Module):
 # -----------------------------
 # 定义 Dice Loss（用于语义分割）
 # -----------------------------
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1.0):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
-
-    def forward(self, logits, targets):
-        """
-        logits: 模型输出的 logits，形状 [N, C, H, W]
-        targets: 分割标签，形状 [N, H, W]，类型为 LongTensor，取值范围为 {0,1,...,C-1}
-        """
-        num_classes = logits.size(1)
-        # 先将 logits 经过 softmax 转换为概率，形状 [N, C, H, W]
-        probs = F.softmax(logits, dim=1)
-        # 将 targets 转为 one-hot 编码，形状转换为 [N, C, H, W]
-        targets_onehot = F.one_hot(targets, num_classes=num_classes).permute(0, 3, 1, 2).float()
-
-        # 将概率和 one-hot 进行展平，形状变为 [N, C, H*W]
-        probs_flat = probs.contiguous().view(probs.size(0), num_classes, -1)
-        targets_flat = targets_onehot.contiguous().view(targets_onehot.size(0), num_classes, -1)
-
-        # 计算交集和和（加上平滑项防止除零）
-        intersection = (probs_flat * targets_flat).sum(-1)
-        union = probs_flat.sum(-1) + targets_flat.sum(-1)
-        dice_score = (2. * intersection + self.smooth) / (union + self.smooth)
-
-        # Dice Loss 为 1 - dice_score 的平均值
-        dice_loss = 1 - dice_score.mean()
-        return dice_loss
+# class DiceLoss(nn.Module):
+#     def __init__(self, smooth=1.0):
+#         super(DiceLoss, self).__init__()
+#         self.smooth = smooth
+#
+#     def forward(self, logits, targets):
+#         """
+#         logits: 模型输出的 logits，形状 [N, C, H, W]
+#         targets: 分割标签，形状 [N, H, W]，类型为 LongTensor，取值范围为 {0,1,...,C-1}
+#         """
+#         num_classes = logits.size(1)
+#         # 先将 logits 经过 softmax 转换为概率，形状 [N, C, H, W]
+#         probs = F.softmax(logits, dim=1)
+#         # 将 targets 转为 one-hot 编码，形状转换为 [N, C, H, W]
+#         targets_onehot = F.one_hot(targets, num_classes=num_classes).permute(0, 3, 1, 2).float()
+#
+#         # 将概率和 one-hot 进行展平，形状变为 [N, C, H*W]
+#         probs_flat = probs.contiguous().view(probs.size(0), num_classes, -1)
+#         targets_flat = targets_onehot.contiguous().view(targets_onehot.size(0), num_classes, -1)
+#
+#         # 计算交集和和（加上平滑项防止除零）
+#         intersection = (probs_flat * targets_flat).sum(-1)
+#         union = probs_flat.sum(-1) + targets_flat.sum(-1)
+#         dice_score = (2. * intersection + self.smooth) / (union + self.smooth)
+#
+#         # Dice Loss 为 1 - dice_score 的平均值
+#         dice_loss = 1 - dice_score.mean()
+#         return dice_loss
 
 
 # ----------------------------------

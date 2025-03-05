@@ -14,6 +14,7 @@ from datetime import datetime
 from models.Unet import Unet
 from models.EdgeUnet import EdgeUnet
 from models.UnetPlusPlus import UnetPlusPlus
+from models.egeunet import EGEUNet
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -77,13 +78,15 @@ def evaluate(model, dataloader, device):
 
             outputs = model(inputs)
             # 如果模型返回多个输出（例如 EdgeUNet 返回 (seg_out, edge_out)），则取第一个作为分割预测
-            if isinstance(outputs, tuple):
+            if model.name == "edgeunet":
                 seg_out = outputs[0]
+            elif model.name == "egeunet":
+                seg_out = outputs[1]
             else:
                 seg_out = outputs
 
             # 将 logits 转换为概率，再二值化（阈值 0.5）
-            preds = (torch.sigmoid(seg_out) > 0.5).float()  # 形状为 [B, 1, H, W]
+            preds = (seg_out > 0.5).float()  # 形状为 [B, 1, H, W]
 
             preds_flat = preds.view(-1)
             labels_flat = labels.view(-1)
@@ -120,13 +123,13 @@ def evaluate(model, dataloader, device):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate segmentation model and output metrics")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet"],
+    parser.add_argument("--model_type", type=str, default="egeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
-    parser.add_argument("--split", type=str, default="test", help="数据集划分，如 test")
+    parser.add_argument("--split", type=str, default="test", help="test")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_epoch_200.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/egeunet/egeunet_epoch_100.pth", help="模型权重文件路径")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,6 +149,13 @@ if __name__ == '__main__':
         model = EdgeUnet(in_channels=3, out_channels=1)
     elif args.model_type == "unet++":
         model = UnetPlusPlus(in_channels=3, out_channels=1)
+    elif args.model_type == "egeunet":
+        model = EGEUNet(num_classes=1,
+                        input_channels=3,
+                        c_list=[8, 16, 24, 32, 48, 64],
+                        bridge=True,
+                        gt_ds=True,
+                        )
     else:
         raise ValueError("Unsupported model type")
     model.to(device)

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import math
 
-from utils import generate_edge_label
+from utils.tools import generate_edge_label
 
 
 def gaussian_kernel(kernel_size=5, sigma=1.0, channels=1):
@@ -256,7 +256,11 @@ class EdgeUnet(nn.Module):
         self.final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
-        self.edge_conv = nn.Conv2d(64, 1, kernel_size=1)
+        self.edge_conv_5 = nn.Conv2d(1024, 1, kernel_size=1)
+        self.edge_conv_4 = nn.Conv2d(512, 1, kernel_size=1)
+        self.edge_conv_3 = nn.Conv2d(256, 1, kernel_size=1)
+        self.edge_conv_2 = nn.Conv2d(128, 1, kernel_size=1)
+        self.edge_conv_1 = nn.Conv2d(64, 1, kernel_size=1)
 
     def conv_block(self, in_channels, out_channels):
         # 定义卷积块，包括两个卷积层和ReLU激活函数
@@ -293,45 +297,71 @@ class EdgeUnet(nn.Module):
         bottleneck = nn.MaxPool2d(kernel_size=2)(enc4)
         bottleneck = self.bottleneck(bottleneck)
 
+        edge_5 = self.edge_conv_5(bottleneck)
+        edge_5 = torch.sigmoid(edge_5)
+
         # 解码器部分
         dec4 = self.upconv4(bottleneck)
         enc4_crop = self.center_crop(enc4, dec4.size())
         dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
         dec4 = self.conv4(dec4)
 
+        edge_4 = self.edge_conv_4(dec4)
+        edge_4 = torch.sigmoid(edge_4)
+
         dec3 = self.upconv3(dec4)
         enc3_crop = self.center_crop(enc3, dec3.size())
         dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
         dec3 = self.conv3(dec3)
+
+        edge_3 = self.edge_conv_3(dec3)
+        edge_3 = torch.sigmoid(edge_3)
 
         dec2 = self.upconv2(dec3)
         enc2_crop = self.center_crop(enc2, dec2.size())
         dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
         dec2 = self.conv2(dec2)
 
+        edge_2 = self.edge_conv_2(dec2)
+        edge_2 = torch.sigmoid(edge_2)
+
         dec1 = self.upconv1(dec2)
         enc1_crop = self.center_crop(enc1, dec1.size())
         dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
         dec1 = self.conv1(dec1)
 
+        edge_1 = self.edge_conv_1(dec1)
+        edge_1 = torch.sigmoid(edge_1)
+
         # 主分支输出：语义分割结果
         seg_out = self.final_conv(dec1)
+        seg_out = torch.sigmoid(seg_out)
 
         # 辅助分支输出：边缘预测
-        edge_out = self.edge_conv(dec1)
+        # edge_out = self.edge_conv(dec1)
         # 为了便于监督，通常对边缘分支输出使用 Sigmoid 得到 [0,1] 概率
-        edge_out = torch.sigmoid(edge_out)
+        # edge_out = torch.sigmoid(edge_out)
 
-        # print(edge_out)
 
-        binary_edge_out = (edge_out > 0.5).float()
-        # print(binary_edge_out)
-        # print(binary_edge_out.s)
-
-        binary_edge_out = canny_edge_torch(binary_edge_out)
+        # binary_edge_out = canny_edge_torch()
         # binary_edge_out = canny_edge_torch_improve(binary_edge_out)
         # binary_edge_out = generate_edge_label(binary_edge_out.cpu().numpy())
 
-        # 返回两个输出，训练时分别计算损失
-        return seg_out, binary_edge_out
+        # print("edge_5", edge_5.shape)
+        # print("edge_4", edge_4.shape)
+        # print("edge_3", edge_3.shape)
+        # print("edge_2", edge_2.shape)
+        # print("edge_1", edge_1.shape)
 
+
+
+
+        return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
+
+# Example of how to use
+if __name__ == "__main__":
+    model = EdgeUnet(in_channels=3, out_channels=1)
+    x = torch.randn(1, 3, 256, 256)  # Example input tensor
+    seg_out, edge_outs = model(x)
+    # print(seg_out.shape) # Expected to be [1, 1, 256, 256]
+    # print(edge_outs[0].shape) # Expected to be [1, 1, 16, 16]

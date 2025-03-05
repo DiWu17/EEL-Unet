@@ -8,13 +8,13 @@ from PIL import Image
 import numpy as np
 from datetime import datetime
 import argparse
-from utils import rgb_to_grayscale, visualize_images, generate_edge_label
+from utils.tools import rgb_to_grayscale, visualize_images, generate_edge_label
 
 # 导入三个模型（确保models文件夹中存在对应模块）
 from models.Unet import Unet
 from models.EdgeUnet import EdgeUnet
 from models.UnetPlusPlus import UnetPlusPlus
-
+from models.egeunet import EGEUNet
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -33,10 +33,10 @@ def save_mask(tensor, save_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet"],
+    parser.add_argument("--model_type", type=str, default="egeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_epoch_100.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/egeunet/egeunet_epoch_30.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()
@@ -61,6 +61,13 @@ if __name__ == '__main__':
         model = EdgeUnet(in_channels=3, out_channels=1)
     elif args.model_type == "unet++":
         model = UnetPlusPlus(in_channels=3, out_channels=1)
+    elif args.model_type == "egeunet":
+        model = EGEUNet(num_classes=1,
+                        input_channels=3,
+                        c_list=[8, 16, 24, 32, 48, 64],
+                        bridge=True,
+                        gt_ds=True,
+                        )
     else:
         raise ValueError("Unsupported model type")
     model.to(device)
@@ -95,6 +102,8 @@ if __name__ == '__main__':
             # 如果模型有多个输出（例如EdgeUNet返回(seg_out, edge_out)），取第一个作为分割结果
             if model.name == "edgeunet":
                 outputs, _ = model(inputs)
+            if model.name == "egeunet":
+                _, outputs = model(inputs)
             else:
                 outputs = model(inputs)
 
