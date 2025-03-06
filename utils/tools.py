@@ -2,6 +2,8 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
+import math
 
 def visualize_images(arr, title="8张图片"):
     """
@@ -139,3 +141,197 @@ def rgb_to_grayscale(batch):
     # 按照加权公式转换为灰度图
     gray = 0.299 * r + 0.587 * g + 0.114 * b
     return gray
+
+
+
+
+def gaussian_kernel(kernel_size=5, sigma=1.0, channels=1):
+    """
+    构造高斯核，返回形状为 (channels, 1, kernel_size, kernel_size) 的核。
+    """
+    # 构建坐标轴（中心在 (kernel_size-1)/2）
+    ax = torch.arange(kernel_size, dtype=torch.float32) - (kernel_size - 1) / 2.
+    xx, yy = torch.meshgrid(ax, ax, indexing='ij')
+    kernel = torch.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
+    kernel = kernel / kernel.sum()
+    kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(channels, 1, 1, 1)
+    return kernel
+
+
+def gaussian_blur_torch(img, kernel_size=5, sigma=1.0):
+    """
+    对输入图像 img 进行高斯平滑。
+    img: (N, C, H, W)
+    """
+    channels = img.shape[1]
+    kernel = gaussian_kernel(kernel_size, sigma, channels).to(img.device).type(img.dtype)
+    padding = kernel_size // 2
+    blurred = F.conv2d(img, kernel, padding=padding, groups=channels)
+    return blurred
+
+
+def sobel_filters():
+    """
+    返回 Sobel 算子的 x、y 核，形状均为 (1,1,3,3)
+    """
+    sobel_x = torch.tensor([[-1., 0., 1.],
+                            [-2., 0., 2.],
+                            [-1., 0., 1.]], dtype=torch.float32)
+    sobel_y = torch.tensor([[-1., -2., -1.],
+                            [0., 0., 0.],
+                            [1., 2., 1.]], dtype=torch.float32)
+    sobel_x = sobel_x.view(1, 1, 3, 3)
+    sobel_y = sobel_y.view(1, 1, 3, 3)
+    return sobel_x, sobel_y
+
+
+def non_max_suppression_vectorized(grad_magnitude, grad_angle):
+    """
+    矢量化实现非极大值抑制。
+
+    参数:
+      grad_magnitude: (N, 1, H, W) 梯度幅值
+      grad_angle: (N, 1, H, W) 梯度角度（单位为度，范围 [0, 180)）
+
+    返回:
+      suppressed: (N, 1, H, W) 非极大值抑制后的结果
+    """
+    # 先将角度归一到 [0,180)
+    angle = grad_angle % 180
+    # 将角度量化为 0°, 45°, 90°, 135° 四个方向
+    q = torch.zeros_like(angle)
+    q[(angle < 22.5) | (angle >= 157.5)] = 0
+    q[(angle >= 22.5) & (angle < 67.5)] = 45
+    q[(angle >= 67.5) & (angle < 112.5)] = 90
+    q[(angle >= 112.5) & (angle < 157.5)] = 135
+
+    mag = grad_magnitude
+
+    # 利用 F.pad 构造出相邻像素（方向不同）：
+    mag_left = F.pad(mag, (1, 0, 0, 0))[:, :, :, :-1]
+    mag_right = F.pad(mag, (0, 1, 0, 0))[:, :, :, 1:]
+    mag_up = F.pad(mag, (0, 0, 1, 0))[:, :, :-1, :]
+    mag_down = F.pad(mag, (0, 0, 0, 1))[:, :, 1:, :]
+    mag_up_left = F.pad(mag, (1, 0, 1, 0))[:, :, :-1, :-1]
+    mag_up_right = F.pad(mag, (0, 1, 1, 0))[:, :, :-1, 1:]
+    mag_down_left = F.pad(mag, (1, 0, 0, 1))[:, :, 1:, :-1]
+    mag_down_right = F.pad(mag, (0, 1, 0, 1))[:, :, 1:, 1:]
+
+    # 对于不同方向的像素，比较当前像素与相邻两个像素的大小：
+    mask0 = (q == 0)
+    mask45 = (q == 45)
+    mask90 = (q == 90)
+    mask135 = (q == 135)
+
+    cond0 = (mag >= mag_left) & (mag >= mag_right)
+    cond45 = (mag >= mag_up_right) & (mag >= mag_down_left)
+    cond90 = (mag >= mag_up) & (mag >= mag_down)
+    cond135 = (mag >= mag_up_left) & (mag >= mag_down_right)
+
+    cond = (mask0 & cond0) | (mask45 & cond45) | (mask90 & cond90) | (mask135 & cond135)
+    suppressed = mag * cond.float()
+    return suppressed
+
+
+def canny_edge_torch(binary_mask, low_threshold=0.2, high_threshold=0.8,
+                     gaussian_kernel_size=5, gaussian_sigma=1.0):
+    """
+    改进版 Canny 边缘检测算法，适配 (N,1,H,W) 输入。
+
+    参数:
+      binary_mask: 输入图像，(N,1,H,W)，假定值在 [0,1] 范围内
+      low_threshold, high_threshold: 双阈值（可调参数）
+      gaussian_kernel_size, gaussian_sigma: 高斯平滑参数
+      gaussian_sigma: 高斯核标准差
+    返回:
+      edges: 二值化边缘图，(N,1,H,W)，边缘像素值为 1，其余为 0
+    """
+    # 1. 高斯平滑
+    blurred = gaussian_blur_torch(binary_mask, kernel_size=gaussian_kernel_size, sigma=gaussian_sigma)
+
+    # 2. 计算梯度（使用 Sobel 算子）
+    sobel_x, sobel_y = sobel_filters()
+    sobel_x = sobel_x.to(binary_mask.device).type(binary_mask.dtype)
+    sobel_y = sobel_y.to(binary_mask.device).type(binary_mask.dtype)
+    grad_x = F.conv2d(blurred, sobel_x, padding=1)
+    grad_y = F.conv2d(blurred, sobel_y, padding=1)
+    grad_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+    grad_angle = torch.atan2(grad_y, grad_x) * 180 / math.pi  # 转为角度
+    grad_angle[grad_angle < 0] += 180  # 保证在 [0,180)
+
+    # 3. 非极大值抑制
+    nms = non_max_suppression_vectorized(grad_magnitude, grad_angle)
+
+    # 4. 双阈值处理
+    # 将大于 high_threshold 的定为强边缘，小于 low_threshold 的舍去，
+    # 介于两者之间的暂定为弱边缘（此处简单处理，直接保留弱边缘）
+    strong = (nms >= high_threshold).float()
+    weak = ((nms >= low_threshold) & (nms < high_threshold)).float()
+    edges = strong + weak
+    edges[edges > 0] = 1.0  # 二值化
+    return edges
+
+
+def canny_edge_torch_improve(binary_mask, low_threshold=0.2, high_threshold=0.7,
+                             gaussian_kernel_size=5, gaussian_sigma=1.0):
+    """
+    改进版 Canny 边缘检测算法，适配 (N,1,H,W) 输入。
+
+    参数:
+      binary_mask: 输入图像，(N,1,H,W)，假定值在 [0,1] 范围内
+      low_threshold, high_threshold: 双阈值（可调参数）
+      gaussian_kernel_size, gaussian_sigma: 高斯平滑参数
+    返回:
+      edges: 二值化边缘图，(N,1,H,W)，边缘像素值为 1，其余为 0
+    """
+    # 1. 高斯平滑
+    blurred = gaussian_blur_torch(binary_mask, kernel_size=gaussian_kernel_size, sigma=gaussian_sigma)
+
+    # 2. 计算梯度（使用 Sobel 算子）
+    sobel_x, sobel_y = sobel_filters()
+    sobel_x = sobel_x.to(binary_mask.device).type(binary_mask.dtype)
+    sobel_y = sobel_y.to(binary_mask.device).type(binary_mask.dtype)
+
+    # 反射填充，减少边界伪影
+    blurred_padded = F.pad(blurred, (1, 1, 1, 1), mode="reflect")
+
+    grad_x = F.conv2d(blurred_padded, sobel_x)
+    grad_y = F.conv2d(blurred_padded, sobel_y)
+
+    grad_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+    epsilon = 1e-6
+    grad_angle = torch.atan2(grad_y, grad_x + epsilon) * 180 / math.pi  # 角度计算稳定
+    grad_angle[grad_angle < 0] += 180  # 保证在 [0,180)
+
+    # 3. 非极大值抑制 (优化 nms 计算方式)
+    nms = non_max_suppression_vectorized(grad_magnitude, grad_angle)
+
+    # 4. 双阈值处理
+    strong = (nms >= high_threshold).float()
+    weak = ((nms >= low_threshold) & (nms < high_threshold)).float()
+
+    # 5. 采用 hysteresis 连接弱边缘
+    edges = hysteresis_thresholding(strong, weak)
+
+    return edges
+
+
+def hysteresis_thresholding(strong, weak):
+    """
+    连接弱边缘到强边缘
+    """
+    kernel = torch.tensor([[1, 1, 1],
+                           [1, 1, 1],
+                           [1, 1, 1]], dtype=torch.float32, device=strong.device).unsqueeze(0).unsqueeze(0)
+
+    strong = strong.bool()  # 转换为 bool 类型
+    weak = weak.bool()
+
+    while True:
+        strong_new = F.conv2d(strong.float(), kernel, padding=1) > 0  # 计算连通性，并转换回 bool
+        if torch.equal(strong_new, strong):  # 直到不再变化
+            break
+        strong = strong_new | weak  # 使用 bool 类型的 | 操作
+
+    return strong.float()  # 转回 float 以匹配原始数据类型
+

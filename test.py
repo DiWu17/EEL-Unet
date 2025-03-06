@@ -33,10 +33,10 @@ def save_mask(tensor, save_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="egeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/egeunet/egeunet_epoch_30.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_epoch_150.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()
@@ -106,10 +106,12 @@ if __name__ == '__main__':
                 _, outputs = model(inputs)
             else:
                 outputs = model(inputs)
-
+            # print(outputs)
             # 使用 Sigmoid 激活转换 logits，并二值化（阈值 0.5）
-            preds = (torch.sigmoid(outputs) > 0.5).float()
-            batch_size = preds.size(0)
+            preds = (outputs[0] > 0.5).float()
+            # batch_size = outputs.size(0)
+            batch_size = args.batch_size
+
             for i in range(batch_size):
                 pred_mask = preds[i, 0, :, :]  # 尺寸为 [H, W]
                 save_filename = f"{global_idx}.png"

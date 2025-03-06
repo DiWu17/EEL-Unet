@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.ndimage import distance_transform_edt, binary_erosion
 
+from utils.tools import *
+
 def compute_distance_map(target_np):
     """
     根据真实二值 mask 计算距离地图。
@@ -88,7 +90,7 @@ class GT_BceDiceLoss(nn.Module):
 
 class edge_bacediceloss(nn.Module):
     def __init__(self, wb=1, wd=1):
-        super(GT_BceDiceLoss, self).__init__()
+        super(edge_bacediceloss, self).__init__()
         self.bcedice = BceDiceLoss(wb, wd)
 
     def forward(self, gt_pre, out, target):
@@ -107,6 +109,39 @@ class edge_bacediceloss(nn.Module):
                   self.bcedice(gt_pre2, target_2) * 0.4 + \
                   self.bcedice(gt_pre1, target_1) * 0.5
         return bcediceloss + gt_loss
+
+class edge_canny_bacediceloss(nn.Module):
+    def __init__(self, wb=1, wd=1):
+        super(edge_canny_bacediceloss, self).__init__()
+        self.bcedice = BceDiceLoss(wb, wd)
+        self.boundaryloss = BoundaryLoss()
+
+    def forward(self, gt_pre, out, target):
+        bcediceloss = self.bcedice(out, target)
+        gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
+
+        # target = canny_edge_torch(target)
+
+        # visualize_images(target.cpu(), "target")
+        # visualize_images(gt_pre1.cpu(), "gt_pre1")
+
+        target_5 = F.max_pool2d(target, kernel_size=16, stride=16)
+        target_4 = F.max_pool2d(target, kernel_size=8, stride=8)
+        target_3 = F.max_pool2d(target, kernel_size=4, stride=4)
+        target_2 = F.max_pool2d(target, kernel_size=2, stride=2)
+        target_1 = target
+
+        # visualize_images(target_1.cpu(), "target_1")
+
+        gt_loss = self.bcedice(gt_pre5, target_5) * 0.1 + \
+                  self.bcedice(gt_pre4, target_4) * 0.2 + \
+                  self.bcedice(gt_pre3, target_3) * 0.3 + \
+                  self.bcedice(gt_pre2, target_2) * 0.4 + \
+                  self.bcedice(gt_pre1, target_1) * 0.5
+        # print(gt_loss)
+        # print(bcediceloss)
+        return bcediceloss + gt_loss
+
 
 
 
@@ -146,6 +181,7 @@ class BoundaryLoss(nn.Module):
             loss += sample_loss
         # 返回 batch 中所有样本的平均损失
         return loss / batch_size
+
 # -----------------------------
 # 定义 Dice Loss（用于语义分割）
 # -----------------------------

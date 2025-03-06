@@ -57,7 +57,9 @@ class ToothDataset(Dataset):
         # 应用数据预处理变换（如果有）
         if self.transform:
             image = self.transform(image)
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(image)
             mask = self.transform(mask)
+            # transforms.Normalize(mean=[0.485], std=[0.229])(mask)
 
         return image, mask
 

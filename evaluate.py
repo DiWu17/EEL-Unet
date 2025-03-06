@@ -82,6 +82,8 @@ def evaluate(model, dataloader, device):
                 seg_out = outputs[0]
             elif model.name == "egeunet":
                 seg_out = outputs[1]
+            elif model.name == "eelunet":
+                seg_out = outputs[1]
             else:
                 seg_out = outputs
 
@@ -123,13 +125,13 @@ def evaluate(model, dataloader, device):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate segmentation model and output metrics")
-    parser.add_argument("--model_type", type=str, default="egeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="test", help="test")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/egeunet/egeunet_epoch_100.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_best.pth", help="模型权重文件路径")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

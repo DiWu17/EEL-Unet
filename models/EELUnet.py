@@ -201,7 +201,7 @@ class Image_Prediction_Generator(nn.Module):
 
     def forward(self, x):
         gt_pre = self.conv(x)
-        x = x + x * torch.sigmoid(gt_pre)
+        x = torch.max(x, torch.sigmoid(gt_pre))
         return x, gt_pre
 
 
@@ -214,12 +214,12 @@ class Merge(nn.Module):
         return x
 
 
-class EGEUNet(nn.Module):
+class EELUnet(nn.Module):
 
     def __init__(self, num_classes=1, input_channels=3, c_list=[8, 16, 24, 32, 48, 64], bridge=True, gt_ds=True):
         super().__init__()
 
-        self.name = "egeunet"
+        self.name = "eelunet"
 
         self.bridge = bridge
         self.gt_ds = gt_ds
@@ -301,9 +301,26 @@ class EGEUNet(nn.Module):
         self.dbn4 = nn.GroupNorm(4, c_list[1])
         self.dbn5 = nn.GroupNorm(4, c_list[0])
 
+
+
         self.final = nn.Conv2d(c_list[0], num_classes, kernel_size=1)
 
         self.apply(self._init_weights)
+
+
+        # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
+        self.edge_conv_5 = nn.Sequential(
+            nn.Conv2d(c_list[4], 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+        # self.edge_conv_4 = nn.Conv2d(c_list[3], 1, kernel_size=1)
+        # self.edge_conv_3 = nn.Conv2d(c_list[2], 1, kernel_size=1)
+        # self.edge_conv_2 = nn.Conv2d(c_list[1], 1, kernel_size=1)
+        # self.edge_conv_1 = nn.Conv2d(c_list[0], 1, kernel_size=1)
+        self.edge_final_conv = nn.Conv2d(c_list[0], num_classes, kernel_size=1)
+
+
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -347,10 +364,10 @@ class EGEUNet(nn.Module):
 
         out = self.decoder1(out)
         out = F.gelu(self.dbn1(out))  # b, 48, 8, 8
-
         out, gt_pre5 = self.pred1(out)
         out = self.merge5(out, t5, gt_pre5, 0.1)  # b, 48, 8, 8
         gt_pre5 = F.interpolate(gt_pre5, scale_factor=32, mode='bilinear', align_corners=True)
+
 
         out = self.decoder2(out)
         out = F.gelu(
@@ -358,6 +375,7 @@ class EGEUNet(nn.Module):
         out, gt_pre4 = self.pred2(out)
         out = self.merge4(out, t4, gt_pre4, 0.2)  # b, 32, 16, 16
         gt_pre4 = F.interpolate(gt_pre4, scale_factor=16, mode='bilinear', align_corners=True)
+        # gt_pre4 = torch.max(gt_pre4, edge_pre4)
 
         out = self.decoder3(out)
 
@@ -368,6 +386,8 @@ class EGEUNet(nn.Module):
         gt_pre3 = F.interpolate(gt_pre3, scale_factor=8, mode='bilinear', align_corners=True)
 
         out = self.decoder4(out)
+
+
         out = F.gelu(
             F.interpolate(self.dbn4(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 16, 64, 64
         out, gt_pre2 = self.pred4(out)
@@ -375,13 +395,18 @@ class EGEUNet(nn.Module):
         gt_pre2 = F.interpolate(gt_pre2, scale_factor=4, mode='bilinear', align_corners=True)
 
         out = self.decoder5(out)
+
         out = F.gelu(
             F.interpolate(self.dbn5(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 8, 128, 128
         out, gt_pre1 = self.pred5(out)
         out = self.merge1(out, t1, gt_pre1, 0.5)  # b, 3, 128, 128
         gt_pre1 = F.interpolate(gt_pre1, scale_factor=2, mode='bilinear', align_corners=True)
 
+        edge_out = self.edge_final_conv(out)
+        torch.sigmoid(edge_out)
         out = self.final(out)
+        out = torch.max(out, edge_out)
+
         out = F.interpolate(out, scale_factor=(2, 2), mode='bilinear', align_corners=True)  # b, num_class, H, W
 
         if self.gt_ds:
