@@ -5,9 +5,6 @@ import torch.nn.functional as F
 from utils.tools import canny_edge_torch, visualize_images
 
 
-
-
-
 def extract_edges_torch(binary_mask):
     """
     从二值化 mask 中提取边缘。
@@ -31,6 +28,7 @@ def extract_edges_torch(binary_mask):
     edges = ((binary_mask == 1) & (neighbor_sum < 9)).to(binary_mask.dtype)
 
     return edges
+
 
 class EdgeUnet(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -63,11 +61,21 @@ class EdgeUnet(nn.Module):
         self.edge_final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
+
         self.edge_conv_5 = nn.Conv2d(1024, 1, kernel_size=1)
         self.edge_conv_4 = nn.Conv2d(512, 1, kernel_size=1)
         self.edge_conv_3 = nn.Conv2d(256, 1, kernel_size=1)
         self.edge_conv_2 = nn.Conv2d(128, 1, kernel_size=1)
         self.edge_conv_1 = nn.Conv2d(64, 1, kernel_size=1)
+
+        self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
+                                           self.conv_block(512, 512))
+        self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
+                                           self.conv_block(256, 256))
+        self.edge_upconv_2 = nn.Sequential(self.upconv_block(256, 128),
+                                           self.conv_block(128, 128))
+        self.edge_upconv_1 = nn.Sequential(self.upconv_block(128, 64),
+                                           self.conv_block(64, 64))
 
     def conv_block(self, in_channels, out_channels):
         # 定义卷积块，包括两个卷积层、ReLU激活函数和Dropout层
@@ -130,7 +138,6 @@ class EdgeUnet(nn.Module):
         seg_out = self.final_conv(dec1)
         seg_out = torch.sigmoid(seg_out)
 
-        # 辅助分支输出：边缘预测
         edge_5 = self.edge_conv_5(bottleneck)
         edge_5 = torch.sigmoid(edge_5)
 
@@ -146,10 +153,14 @@ class EdgeUnet(nn.Module):
         edge_1 = self.edge_conv_1(dec1)
         edge_1 = torch.sigmoid(edge_1)
 
-        edge_out = self.edge_final_conv(dec1)
+        edge_dec5 = self.edge_upconv_4(bottleneck)
+        edge_dec4 = self.edge_upconv_3(edge_dec5)
+        edge_dec3 = self.edge_upconv_2(edge_dec4)
+        edge_dec2 = self.edge_upconv_1(edge_dec3)
+
+        edge_out = self.edge_final_conv(edge_dec2)
         edge_out = torch.sigmoid(edge_out)
 
-        # seg_out与edge_out取值范围均为 [0,1]，将edge_out中比seg_out更大的值赋值给seg_out
         seg_out = torch.max(seg_out, edge_out)
 
         return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]

@@ -131,7 +131,7 @@ if __name__ == '__main__':
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="test", help="test")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_best.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_best_iou.pth", help="模型权重文件路径")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

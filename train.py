@@ -17,7 +17,6 @@ from models.EELUnet import EELUnet
 
 from utils.Loss import *
 
-
 from data.ToothDataset import ToothDataset
 from evaluate import evaluate
 
@@ -27,31 +26,9 @@ def train_one_epoch(model, train_loader, criterion, optimizer, device):
     for inputs, labels in train_loader:
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-
-        if model.name == "edgeunet":
-            # 生成边缘标签
-            seg_out, edge_outs = model(inputs)
-            loss = criterion(edge_outs, seg_out, labels)
-        elif model.name == "unet":
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-        elif model.name == "unet++":
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-        elif model.name == "egeunet":
-            gt_pre, out = model(inputs)
-            # print(out.shape, labels.shape)
-            loss = criterion(gt_pre, out, labels)
-        elif model.name == "eelunet":
-            gt_pre, out = model(inputs)
-            # print(out.shape, labels.shape)
-            loss = criterion(gt_pre, out, labels)
-        else:
-            raise ValueError("Unsupported model type")
-
+        loss = calculate_loss(model, criterion, inputs, labels)
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item()
     epoch_train_loss = running_loss / len(train_loader)
 
@@ -65,27 +42,32 @@ def val_one_epoch(model, val_loader, criterion, device):
     with torch.no_grad():
         for inputs, labels in val_loader:
             inputs, labels = inputs.to(device), labels.to(device)
-            if model.name == "edgeunet":
-                # 生成边缘标签
-                seg_out, edge_outs = model(inputs)
-                loss = criterion(edge_outs, seg_out, labels)
-            elif model.name == "unet":
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-            elif model.name == "unet++":
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-            elif model.name == "egeunet":
-                gt_pre, out = model(inputs)
-                loss = criterion(gt_pre, out, labels)
-            elif model.name == "eelunet":
-                gt_pre, out = model(inputs)
-                loss = criterion(gt_pre, out, labels)
-            else:
-                raise ValueError("Unsupported model type")
+            loss = calculate_loss(model, criterion, inputs, labels)
             val_loss += loss.item()
     epoch_val_loss = val_loss / len(val_loader)
     return epoch_val_loss
+
+
+def calculate_loss(model, criterion, inputs, labels):
+    if model.name == "edgeunet":
+        # 生成边缘标签
+        seg_out, edge_outs = model(inputs)
+        loss = criterion(edge_outs, seg_out, labels)
+    elif model.name == "unet":
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+    elif model.name == "unet++":
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+    elif model.name == "egeunet":
+        gt_pre, out = model(inputs)
+        loss = criterion(gt_pre, out, labels)
+    elif model.name == "eelunet":
+        gt_pre, out = model(inputs)
+        loss = criterion(gt_pre, out, labels)
+    else:
+        raise ValueError("Unsupported model type")
+    return loss
 
 
 def train(model, train_loader, val_loader, test_loader, criterion, optimizer, device, num_epochs=10,
@@ -119,8 +101,6 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
 
         # 验证
         epoch_val_loss = val_one_epoch(model, val_loader, criterion, device)
-
-
 
         pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1 = evaluate(model, test_loader, device)
 
@@ -162,7 +142,6 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
             save_path = os.path.join(save_dir, f'{model.name}_best.pth')
             torch.save(model.state_dict(), save_path)
 
-
         # 打印当前 epoch 的训练和验证损失
         print(f'Epoch [{epoch + 1}/{num_epochs}]\t'
               f'Train Loss: {epoch_train_loss:.4f}\t'
@@ -199,13 +178,14 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train segmentation model with edge supervision")
-    parser.add_argument("--model_type", type=str, default="eelunet", choices=["unet", "unet++", "edgeunet", "egeunet", "eelunet"],
+    parser.add_argument("--model_type", type=str, default="edgeunet",
+                        choices=["unet", "unet++", "edgeunet", "egeunet", "eelunet"],
                         help="选择模型类型")
     # parser.add_argument("--data_dir", type=str, default="D:/python/EGE-UNet/data/tooth_seg_new_split_data", help="数据集目录")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="train", help="数据集划分，比如 train 或 test")
-    parser.add_argument("--epochs", type=int, default=150, help="训练轮数")
+    parser.add_argument("--epochs", type=int, default=200, help="训练轮数")
     parser.add_argument("--batch_size", type=int, default=8, help="批大小")
     parser.add_argument("--lr", type=float, default=1e-4, help="学习率")
     parser.add_argument("--save_dir", type=str, default="checkpoints", help="保存权重的目录")
@@ -271,8 +251,8 @@ if __name__ == '__main__':
 
     # 损失函数与优化器
     # criterion = nn.BCEWithLogitsLoss()
-    criterion = GT_BceDiceLoss(wb=1, wd=1)
-    # criterion = edge_bacediceloss(wb=1, wd=1)
+    # criterion = GT_BceDiceLoss(wb=1, wd=1)
+    criterion = edge_bacediceloss(wb=1, wd=1)
     # criterion = edge_canny_bacediceloss(wb=1, wd=1)
 
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
