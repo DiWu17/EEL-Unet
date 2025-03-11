@@ -82,8 +82,6 @@ def evaluate(model, dataloader, device):
                 seg_out = outputs[0]
             elif model.name == "egeunet":
                 seg_out = outputs[1]
-            elif model.name == "eelunet":
-                seg_out = outputs[1]
             else:
                 seg_out = outputs
 

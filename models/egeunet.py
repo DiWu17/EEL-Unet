@@ -45,7 +45,7 @@ class LayerNorm(nn.Module):
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
 
-
+# 
 # class group_aggregation_bridge(nn.Module):
 #     def __init__(self, dim_xh, dim_xl, k_size=3, d_list=[1,2,5,7]):
 #         super().__init__()
