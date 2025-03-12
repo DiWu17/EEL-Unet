@@ -191,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="train", help="数据集划分，比如 train 或 test")
-    parser.add_argument("--epochs", type=int, default=200, help="训练轮数")
+    parser.add_argument("--epochs", type=int, default=100, help="训练轮数")
     parser.add_argument("--batch_size", type=int, default=8, help="批大小")
     parser.add_argument("--lr", type=float, default=1e-4, help="学习率")
     parser.add_argument("--save_dir", type=str, default="checkpoints", help="保存权重的目录")

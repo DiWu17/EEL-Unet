@@ -5,37 +5,71 @@ import torch
 import torch.nn.functional as F
 import math
 
-def visualize_images(arr, title="8张图片"):
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+def visualize_images(arr, title="Images"):
     """
-    可视化形状为 (8, 1, 256, 256) 的 numpy 数组，每一张图片为灰度图像，并为整个图设置一个标题。
+    可视化形状为 (batch_size, channels, height, width) 的图像数组。
+    支持灰度图 (channels=1) 和彩色图 (channels=3)，batch_size 决定图片数量。
 
     参数:
-        arr: numpy.ndarray, 形状为 (8, 1, 256, 256)
-        title: str, 整个图的标题（默认为 "8张图片"）
+        arr: numpy.ndarray, 形状为 (batch_size, channels, height, width)
+        title: str, 整个图的标题（默认为 "Images"）
     """
-    # 检查输入数组是否满足要求
-    if arr.ndim != 4 or arr.shape[0] != 8 or arr.shape[1] != 1:
-        print("输入数组形状应为 (8, 1, 256, 256)")
+    # 检查输入数组的维度
+    if arr.ndim != 4:
+        print("输入数组必须是4维")
         print(f"当前输入数组形状为 {arr.shape}")
         return
-        # raise ValueError("输入数组形状应为 (8, 1, 256, 256)")
 
-    # 创建2行4列的子图
-    fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+    # 获取数组形状
+    batch_size, channels, height, width = arr.shape
 
-    # 设置整个图的标题
+    # 检查通道数是否为 1 或 3
+    if channels not in [1, 3]:
+        print("通道数必须为 1（灰度图）或 3（彩色图）")
+        print(f"当前通道数为 {channels}")
+        return
+
+    # 根据 batch_size 动态计算子图的行数和列数
+    cols = min(batch_size, 4)  # 最多4列
+    rows = math.ceil(batch_size / cols)  # 计算需要的行数
+
+    # 创建子图
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 3, rows * 3))
     fig.suptitle(title, fontsize=16)
 
-    # 遍历8张图片，取第2个维度索引0作为通道
-    for i, ax in enumerate(axes.flat):
-        img = arr[i, 0, :, :]
-        ax.imshow(img, cmap='gray')
-        ax.set_title(f"Image {i + 1}")
-        ax.axis('off')
+    # 如果 batch_size=1，axes 不是数组，需要特殊处理
+    if batch_size == 1:
+        axes = np.array([axes])
 
-    # 调整布局，使标题不会遮挡子图
+    # 将 axes 转换为一维数组以便遍历
+    axes = axes.flatten()
+
+    # 遍历所有图片
+    for i in range(batch_size):
+        if i < len(axes):  # 确保不超出 axes 数量
+            ax = axes[i]
+            if channels == 1:
+                # 灰度图
+                img = arr[i, 0, :, :]
+                ax.imshow(img, cmap='gray')
+            elif channels == 3:
+                # 彩色图
+                img = arr[i]  # (3, H, W)
+                img = np.transpose(img, (1, 2, 0))  # (H, W, 3)
+                ax.imshow(img)
+            ax.set_title(f"Image {i + 1}")
+            ax.axis('off')
+
+    # 如果 batch_size 小于子图总数，隐藏多余的子图
+    for i in range(batch_size, len(axes)):
+        axes[i].axis('off')
+
+    # 调整布局
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    # plt.imsave("results/edge_gt.png", arr[0, 0, :, :], cmap='gray')
     plt.show()
 
 def generate_edge_label(gt):
@@ -335,3 +369,53 @@ def hysteresis_thresholding(strong, weak):
 
     return strong.float()  # 转回 float 以匹配原始数据类型
 
+
+def calculate_contribution(seg_out, edge_out):
+    """
+    计算 torch.max(seg_out, edge_out) 中 seg_out 和 edge_out 的贡献比例。
+
+    参数:
+        seg_out: torch.Tensor, 第一个输入张量
+        edge_out: torch.Tensor, 第二个输入张量
+
+    返回:
+        dict: 包含 seg_out 和 edge_out 贡献百分比的字典
+    """
+    # 确保两个张量形状相同
+    if seg_out.shape != edge_out.shape:
+        raise ValueError(f"张量形状必须相同，但得到 seg_out: {seg_out.shape}, edge_out: {edge_out.shape}")
+
+    # 计算逐元素的最大值
+    max_result = torch.max(seg_out, edge_out)
+
+    # 计算 seg_out 和 edge_out 的贡献
+    seg_contribution = (seg_out == max_result)  # seg_out 等于最大值的位置
+    edge_contribution = (edge_out == max_result)  # edge_out 等于最大值的位置
+
+    # 计算总元素数
+    total_elements = seg_out.numel()
+
+    # 计算每个张量的贡献数量
+    seg_count = seg_contribution.sum().item()
+    edge_count = edge_contribution.sum().item()
+
+    # 处理可能的重叠（相等的情况）
+    equal_count = (seg_out == edge_out).sum().item()
+    if seg_count + edge_count > total_elements:
+        # 如果有相等元素，调整计数（均分贡献）
+        overlap = seg_count + edge_count - total_elements
+        seg_count -= overlap / 2
+        edge_count -= overlap / 2
+
+    # 计算百分比
+    seg_percent = (seg_count / total_elements) * 100
+    edge_percent = (edge_count / total_elements) * 100
+
+    print(f"seg_out contribution: {seg_percent:.2f}%")
+
+    # 返回结果
+    return {
+        "seg_out_contribution": seg_percent,
+        "edge_out_contribution": edge_percent,
+        "equal_elements": (equal_count / total_elements) * 100
+    }

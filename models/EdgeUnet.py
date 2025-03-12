@@ -2,7 +2,59 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.tools import canny_edge_torch, visualize_images
+from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
+
+
+class HighFourierTransform(nn.Module):
+    def __init__(self, mask_range=20):
+        """
+        Args:
+            mask_range (int): 高通滤波器的中心掩码范围
+        """
+        super(HighFourierTransform, self).__init__()
+        self.mask_range = mask_range
+
+    def _create_high_pass_mask(self, rows, cols):
+        """创建高通滤波掩码"""
+        crow, ccol = rows // 2, cols // 2
+        # 限制mask范围不超过图像尺寸
+        mask_range = min(self.mask_range, min(crow, ccol))
+
+        # 创建掩码
+        mask = torch.ones((rows, cols), dtype=torch.float32)
+        mask[crow - mask_range:crow + mask_range,
+        ccol - mask_range:ccol + mask_range] = 0
+
+        return mask
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): 输入张量，形状为 [batch_size, channels, height, width]
+
+        Returns:
+            torch.Tensor: 高通滤波后的张量，保持输入形状
+        """
+        batch_size, channels, height, width = x.shape
+
+        # 创建高通滤波掩码并调整形状
+        mask_h = self._create_high_pass_mask(height, width)
+        mask_h = mask_h.view(1, 1, height, width).to(x.device)  # [1, 1, H, W]
+
+        # 傅里叶变换
+        dft = torch.fft.fft2(x)
+        dft_shift = torch.fft.fftshift(dft)
+
+        # 应用高通滤波
+        fshift_h = dft_shift * mask_h
+        f_ishift_h = torch.fft.ifftshift(fshift_h)
+
+        # 逆傅里叶变换并取实部
+        img_back_h = torch.abs(torch.fft.ifft2(f_ishift_h))
+
+        return img_back_h
+
+
 
 class Image_Prediction_Generator(nn.Module):
     def __init__(self, in_channels):
@@ -104,31 +156,6 @@ class Grouped_multi_axis_Hadamard_Product_Attention(nn.Module):
         return x
 
 
-def extract_edges_torch(binary_mask):
-    """
-    从二值化 mask 中提取边缘。
-
-    输入:
-        binary_mask: torch.Tensor，形状为 (N, 1, H, W)，
-                     假设前景像素为 1，背景像素为 0
-    输出:
-        edges: torch.Tensor，形状与 binary_mask 相同，
-               边缘像素为 1，其它像素为 0
-    """
-    # 定义 3x3 全 1 的卷积核，与输入 tensor 同 device 和 dtype
-    kernel = torch.ones((1, 1, 3, 3), dtype=binary_mask.dtype, device=binary_mask.device)
-
-    # 通过卷积计算每个像素及其 3x3 邻域内所有值的和
-    # 使用 padding=1 保持输出尺寸与输入一致（边缘处自动补 0）
-    neighbor_sum = F.conv2d(binary_mask, kernel, padding=1)
-
-    # 对于每个前景像素（==1），如果其邻域（包括自身）的和小于 9，则说明至少存在一个背景邻域，
-    # 该像素被视为边缘像素
-    edges = ((binary_mask == 1) & (neighbor_sum < 9)).to(binary_mask.dtype)
-
-    return edges
-
-
 class EdgeUnet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(EdgeUnet, self).__init__()
@@ -137,12 +164,19 @@ class EdgeUnet(nn.Module):
         self.name = "edgeunet"
 
         # 编码器部分
-        self.enc1 = self.conv_block(in_channels, 64)
-        self.enc2 = self.conv_block(64, 128)
-        # self.enc3 = self.conv_block(128, 256)
-        # self.enc4 = self.conv_block(256, 512)
-        self.enc3 = Grouped_multi_axis_Hadamard_Product_Attention(128, 256)
-        self.enc4 = Grouped_multi_axis_Hadamard_Product_Attention(256, 512)
+
+        self.enc1 = nn.Sequential(
+            self.conv_block(in_channels, 64),
+        )
+        self.enc2 = nn.Sequential(
+            self.conv_block(64, 128),
+        )
+        self.enc3 = nn.Sequential(
+            self.conv_block(128, 256),
+        )
+        self.enc4 = nn.Sequential(
+            self.conv_block(256, 512),
+        )
 
         # 瓶颈层
         self.bottleneck = self.conv_block(512, 1024)
@@ -151,21 +185,24 @@ class EdgeUnet(nn.Module):
         self.upconv4 = self.upconv_block(1024, 512)
 
         # self.conv4 = self.conv_block(1024, 512)
-        self.conv4 = Grouped_multi_axis_Hadamard_Product_Attention(1024, 512)
+        self.dec4 = Grouped_multi_axis_Hadamard_Product_Attention(1024, 512)
 
         self.upconv3 = self.upconv_block(512, 256)
 
         # self.conv3 = self.conv_block(512, 256)
-        self.conv3 = Grouped_multi_axis_Hadamard_Product_Attention(512, 256)
+        self.dec3 = Grouped_multi_axis_Hadamard_Product_Attention(512, 256)
 
         self.upconv2 = self.upconv_block(256, 128)
-        self.conv2 = self.conv_block(256, 128)
+        self.dec2 = self.conv_block(256, 128)
         self.upconv1 = self.upconv_block(128, 64)
-        self.conv1 = self.conv_block(128, 64)
+        self.dec1 = self.conv_block(128, 64)
 
         # 最终输出层（语义分割结果）
-        self.final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
-        self.edge_final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
+        self.final_conv = nn.Sequential(
+            HighFourierTransform(),
+            nn.Conv2d(64, out_channels, kernel_size=1),
+        )
+
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
 
@@ -175,10 +212,14 @@ class EdgeUnet(nn.Module):
         self.edge_conv_2 = nn.Conv2d(128, 1, kernel_size=1)
         self.edge_conv_1 = nn.Conv2d(64, 1, kernel_size=1)
 
-        # self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
-        #                                    self.conv_block(512, 512))
-        # self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
-        #                                    self.conv_block(256, 256))
+        self.pred5 = Image_Prediction_Generator(1024)
+        self.pred4 = Image_Prediction_Generator(512)
+        self.pred3 = Image_Prediction_Generator(256)
+        self.pred2 = Image_Prediction_Generator(128)
+        self.pred1 = Image_Prediction_Generator(64)
+
+
+
         self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
                                            Grouped_multi_axis_Hadamard_Product_Attention(512, 512))
         self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
@@ -188,13 +229,32 @@ class EdgeUnet(nn.Module):
                                            self.conv_block(128, 128))
         self.edge_upconv_1 = nn.Sequential(self.upconv_block(128, 64),
                                            self.conv_block(64, 64))
+        # self.edge_final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
+        self.edge_final_conv = nn.Sequential(
+            # HighFourierTransform(),
+            nn.Conv2d(64, out_channels, kernel_size=1),
+        )
 
-        self.pred5 = Image_Prediction_Generator(1024)
-        self.pred4 = Image_Prediction_Generator(512)
-        self.pred3 = Image_Prediction_Generator(256)
-        self.pred2 = Image_Prediction_Generator(128)
-        self.pred1 = Image_Prediction_Generator(64)
-
+        # self.edge_enc1 = nn.Sequential(
+        #     HighFourierTransform(),
+        #     self.conv_block(in_channels, 64),
+        # )
+        # self.edge_enc2 = nn.Sequential(
+        #     HighFourierTransform(),
+        #     self.conv_block(64, 128),
+        # )
+        # self.edge = nn.Sequential(
+        #     HighFourierTransform(),
+        #     self.conv_block(128, 256),
+        # )
+        # self.edge_enc4 = nn.Sequential(
+        #     HighFourierTransform(),
+        #     self.conv_block(256, 512),
+        # )
+        # self.edge_bottleneck = nn.Sequential(
+        #     HighFourierTransform(),
+        #     self.conv_block(512, 1024)
+        # )
 
 
     def conv_block(self, in_channels, out_channels):
@@ -224,6 +284,7 @@ class EdgeUnet(nn.Module):
         return layer[:, :, top:top + target_h, left:left + target_w]
 
     def forward(self, x):
+        # 主分支
         # 编码器部分
         enc1 = self.enc1(x)
         enc2 = nn.MaxPool2d(kernel_size=2)(enc1)
@@ -240,39 +301,59 @@ class EdgeUnet(nn.Module):
         dec4 = self.upconv4(bottleneck)
         enc4_crop = self.center_crop(enc4, dec4.size())
         dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
-        dec4 = self.conv4(dec4)
+        dec4 = self.dec4(dec4)
 
         dec3, edge_4 = self.pred4(dec4)
         dec3 = self.upconv3(dec3)
         enc3_crop = self.center_crop(enc3, dec3.size())
         dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
-        dec3 = self.conv3(dec3)
+        dec3 = self.dec3(dec3)
 
         dec2, edge_3 = self.pred3(dec3)
         dec2 = self.upconv2(dec2)
         enc2_crop = self.center_crop(enc2, dec2.size())
         dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
-        dec2 = self.conv2(dec2)
+        dec2 = self.dec2(dec2)
 
         dec1, edge_2 = self.pred2(dec2)
         dec1 = self.upconv1(dec1)
         enc1_crop = self.center_crop(enc1, dec1.size())
         dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
-        dec1 = self.conv1(dec1)
+        dec1 = self.dec1(dec1)
 
         seg_out, edge_1 = self.pred1(dec1)
         seg_out = self.final_conv(dec1)
         # 主分支输出：语义分割结果
         seg_out = torch.sigmoid(seg_out)
 
+
+        # 辅助分支
+        # edge_enc1 = self.edge_enc1(x)
+        # edge_enc2 = nn.MaxPool2d(kernel_size=2)(edge_enc1)
+        # edge_enc2 = self.edge_enc2(edge_enc2)
+        # edge_enc3 = nn.MaxPool2d(kernel_size=2)(edge_enc2)
+        # edge_enc3 = self.edge(edge_enc3)
+        # edge_enc4 = nn.MaxPool2d(kernel_size=2)(edge_enc3)
+        # edge_enc4 = self.edge_enc4(edge_enc4)
+        # edge_bottleneck = nn.MaxPool2d(kernel_size=2)(edge_enc4)
+        # edge_bottleneck = self.edge_bottleneck(bottleneck)
         edge_dec5 = self.edge_upconv_4(bottleneck)
         edge_dec4 = self.edge_upconv_3(edge_dec5)
         edge_dec3 = self.edge_upconv_2(edge_dec4)
         edge_dec2 = self.edge_upconv_1(edge_dec3)
 
         edge_out = self.edge_final_conv(edge_dec2)
+        # visualize_images(edge_out.cpu().detach().numpy(), "first")
+        # edge_out = HighFourierTransform()(edge_out)
+        # visualize_images(edge_out.cpu().detach().numpy(), "second")
         edge_out = torch.sigmoid(edge_out)
+        # visualize_images(edge_out.cpu().detach().numpy(), "third")
 
+        # visualize_images(edge_out.cpu().detach().numpy(), "edge_out")
+        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
+        # seg_out = torch.min(seg_out + edge_out, torch.ones_like(seg_out))
+        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
+        # calculate_contribution(seg_out, edge_out)
         seg_out = torch.max(seg_out, edge_out)
 
         return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]

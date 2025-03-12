@@ -103,8 +103,6 @@ class edge_bacediceloss(nn.Module):
         target_2 = F.max_pool2d(target, kernel_size=2, stride=2)
         target_1 = target
 
-        # print(target_1.size(), gt_pre1.size())
-
         gt_loss = self.bcedice(gt_pre5, target_5) * 0.1 + \
                   self.bcedice(gt_pre4, target_4) * 0.2 + \
                   self.bcedice(gt_pre3, target_3) * 0.3 + \
