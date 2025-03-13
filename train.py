@@ -184,7 +184,7 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train segmentation model with edge supervision")
-    parser.add_argument("--model_type", type=str, default="edgeunet",
+    parser.add_argument("--model_type", type=str, default="egeunet",
                         choices=["unet", "edgeunet", "egeunet"],
                         help="选择模型类型")
     # parser.add_argument("--data_dir", type=str, default="D:/python/EGE-UNet/data/tooth_seg_new_split_data", help="数据集目录")
@@ -252,8 +252,8 @@ if __name__ == '__main__':
 
     # 损失函数与优化器
     # criterion = nn.BCEWithLogitsLoss()
-    # criterion = GT_BceDiceLoss(wb=1, wd=1)
-    criterion = edge_bacediceloss(wb=1, wd=1)
+    criterion = GT_BceDiceLoss(wb=1, wd=1)
+    # criterion = edge_bacediceloss(wb=1, wd=1)
 
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     # optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.90, weight_decay=1e-5)

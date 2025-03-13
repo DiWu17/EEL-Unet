@@ -353,7 +353,7 @@ class EdgeUnet(nn.Module):
         # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
         # seg_out = torch.min(seg_out + edge_out, torch.ones_like(seg_out))
         # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
-        # calculate_contribution(seg_out, edge_out)
+        calculate_contribution(seg_out, edge_out)
         seg_out = torch.max(seg_out, edge_out)
 
         return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
