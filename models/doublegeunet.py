@@ -8,6 +8,57 @@ import math
 
 
 
+class HighFourierTransform(nn.Module):
+    def __init__(self, mask_range=20):
+        """
+        Args:
+            mask_range (int): 高通滤波器的中心掩码范围
+        """
+        super(HighFourierTransform, self).__init__()
+        self.mask_range = mask_range
+
+    def _create_high_pass_mask(self, rows, cols):
+        """创建高通滤波掩码"""
+        crow, ccol = rows // 2, cols // 2
+        # 限制mask范围不超过图像尺寸
+        mask_range = min(self.mask_range, min(crow, ccol))
+
+        # 创建掩码
+        mask = torch.ones((rows, cols), dtype=torch.float32)
+        mask[crow - mask_range:crow + mask_range,
+        ccol - mask_range:ccol + mask_range] = 0
+        return mask
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): 输入张量，形状为 [batch_size, channels, height, width]
+
+        Returns:
+            torch.Tensor: 高通滤波后的张量，保持输入形状
+        """
+        batch_size, channels, height, width = x.shape
+
+        # 创建高通滤波掩码并调整形状
+        mask_h = self._create_high_pass_mask(height, width)
+        mask_h = mask_h.view(1, 1, height, width).to(x.device)  # [1, 1, H, W]
+
+        # 傅里叶变换
+        dft = torch.fft.fft2(x)
+        dft_shift = torch.fft.fftshift(dft)
+
+        # 应用高通滤波
+        fshift_h = dft_shift * mask_h
+        f_ishift_h = torch.fft.ifftshift(fshift_h)
+
+        # 逆傅里叶变换并取实部
+        img_back_h = torch.abs(torch.fft.ifft2(f_ishift_h))
+
+        return img_back_h
+
+
+
+
 class DepthWiseConv2d(nn.Module):
     def __init__(self, dim_in, dim_out, kernel_size=3, padding=1, stride=1, dilation=1):
         super().__init__()
@@ -301,6 +352,9 @@ class EGEUNet(nn.Module):
         self.dbn4 = nn.GroupNorm(4, c_list[1])
         self.dbn5 = nn.GroupNorm(4, c_list[0])
 
+        self.highfourier = HighFourierTransform()
+
+
         self.final = nn.Conv2d(c_list[0], num_classes, kernel_size=1)
 
         self.apply(self._init_weights)
@@ -345,46 +399,99 @@ class EGEUNet(nn.Module):
         out = self.encoder6(out)
         out = F.gelu(out)  # b, 64, 8, 8
 
-        out = self.decoder1(out)
-        out = F.gelu(self.dbn1(out))  # b, 48, 8, 8
 
-        out, gt_pre5 = self.pred1(out)
-        out = self.merge5(out, t5, gt_pre5, 0.1)  # b, 48, 8, 8
-        gt_pre5 = F.interpolate(gt_pre5, scale_factor=32, mode='bilinear', align_corners=True)
+        # decoder1
 
-        out = self.decoder2(out)
-        out = F.gelu(
-            F.interpolate(self.dbn2(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 32, 16, 16
-        out, gt_pre4 = self.pred2(out)
-        out = self.merge4(out, t4, gt_pre4, 0.2)  # b, 32, 16, 16
-        gt_pre4 = F.interpolate(gt_pre4, scale_factor=16, mode='bilinear', align_corners=True)
 
-        out = self.decoder3(out)
+        out1 = self.decoder1(out)
+        out1 = F.gelu(self.dbn1(out1))  # b, 48, 8, 8
 
-        out = F.gelu(
-            F.interpolate(self.dbn3(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 24, 32, 32
-        out, gt_pre3 = self.pred3(out)
-        out = self.merge3(out, t3, gt_pre3, 0.3)  # b, 24, 32, 32
-        gt_pre3 = F.interpolate(gt_pre3, scale_factor=8, mode='bilinear', align_corners=True)
+        out1, gt_pre51 = self.pred1(out1)
+        out1 = self.merge5(out1, t5, gt_pre51, 0.1)  # b, 48, 8, 8
+        gt_pre51 = F.interpolate(gt_pre51, scale_factor=32, mode='bilinear', align_corners=True)
 
-        out = self.decoder4(out)
-        out = F.gelu(
-            F.interpolate(self.dbn4(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 16, 64, 64
-        out, gt_pre2 = self.pred4(out)
-        out = self.merge2(out, t2, gt_pre2, 0.4)  # b, 16, 64, 64
-        gt_pre2 = F.interpolate(gt_pre2, scale_factor=4, mode='bilinear', align_corners=True)
+        out1 = self.decoder2(out1)
+        out1 = F.gelu(
+            F.interpolate(self.dbn2(out1), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 32, 16, 16
+        out1, gt_pre41 = self.pred2(out1)
+        out1 = self.merge4(out1, t4, gt_pre41, 0.2)  # b, 32, 16, 16
+        gt_pre41 = F.interpolate(gt_pre41, scale_factor=16, mode='bilinear', align_corners=True)
 
-        out = self.decoder5(out)
-        out = F.gelu(
-            F.interpolate(self.dbn5(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 8, 128, 128
-        out, gt_pre1 = self.pred5(out)
-        out = self.merge1(out, t1, gt_pre1, 0.5)  # b, 3, 128, 128
-        gt_pre1 = F.interpolate(gt_pre1, scale_factor=2, mode='bilinear', align_corners=True)
+        out1 = self.decoder3(out1)
+
+        out1 = F.gelu(
+            F.interpolate(self.dbn3(out1), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 24, 32, 32
+        out1, gt_pre31 = self.pred3(out1)
+        out1 = self.merge3(out1, t3, gt_pre31, 0.3)  # b, 24, 32, 32
+        gt_pre31 = F.interpolate(gt_pre31, scale_factor=8, mode='bilinear', align_corners=True)
+
+        out1 = self.decoder4(out1)
+        out1 = F.gelu(
+            F.interpolate(self.dbn4(out1), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 16, 64, 64
+        out1, gt_pre21 = self.pred4(out1)
+        out1 = self.merge2(out1, t2, gt_pre21, 0.4)  # b, 16, 64, 64
+        gt_pre21 = F.interpolate(gt_pre21, scale_factor=4, mode='bilinear', align_corners=True)
+
+        out1 = self.decoder5(out1)
+        out1 = F.gelu(
+            F.interpolate(self.dbn5(out1), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 8, 128, 128
+        out1, gt_pre11 = self.pred5(out1)
+        out1 = self.merge1(out1, t1, gt_pre11, 0.5)  # b, 3, 128, 128
+        gt_pre11 = F.interpolate(gt_pre11, scale_factor=2, mode='bilinear', align_corners=True)
+
+        # decoder2
+
+        out2 = self.highfourier(out)
+        out2 = self.decoder1(out2)
+        out2 = F.gelu(self.dbn1(out2))  # b, 48, 8, 8
+
+        out2, gt_pre52 = self.pred1(out2)
+        out2 = self.merge5(out2, t5, gt_pre52, 0.1)  # b, 48, 8, 8
+        gt_pre52 = F.interpolate(gt_pre52, scale_factor=32, mode='bilinear', align_corners=True)
+
+        out2 = self.decoder2(out2)
+        out2 = F.gelu(
+            F.interpolate(self.dbn2(out2), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 32, 16, 16
+        out2, gt_pre42 = self.pred2(out2)
+        out2 = self.merge4(out2, t4, gt_pre42, 0.2)  # b, 32, 16, 16
+        gt_pre42 = F.interpolate(gt_pre42, scale_factor=16, mode='bilinear', align_corners=True)
+
+        out2 = self.decoder3(out2)
+
+        out2 = F.gelu(
+            F.interpolate(self.dbn3(out2), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 24, 32, 32
+        out2, gt_pre32 = self.pred3(out2)
+        out2 = self.merge3(out2, t3, gt_pre32, 0.3)  # b, 24, 32, 32
+        gt_pre32 = F.interpolate(gt_pre32, scale_factor=8, mode='bilinear', align_corners=True)
+
+        out2 = self.decoder4(out2)
+        out2 = F.gelu(
+            F.interpolate(self.dbn4(out2), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 16, 64, 64
+        out2, gt_pre22 = self.pred4(out2)
+        out2 = self.merge2(out2, t2, gt_pre22, 0.4)  # b, 16, 64, 64
+        gt_pre22 = F.interpolate(gt_pre22, scale_factor=4, mode='bilinear', align_corners=True)
+
+        out2 = self.decoder5(out2)
+        out2 = F.gelu(
+            F.interpolate(self.dbn5(out2), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 8, 128, 128
+        out2, gt_pre12 = self.pred5(out2)
+        out2 = self.merge1(out1, t1, gt_pre12, 0.5)  # b, 3, 128, 128
+        gt_pre12 = F.interpolate(gt_pre12, scale_factor=2, mode='bilinear', align_corners=True)
+
+
+        # max block
+        gt_pre5 = torch.max(gt_pre51,gt_pre52)
+        gt_pre4 = torch.max(gt_pre41, gt_pre42)
+        gt_pre3 = torch.max(gt_pre31, gt_pre32)
+        gt_pre2 = torch.max(gt_pre21, gt_pre22)
+        gt_pre1 = torch.max(gt_pre11, gt_pre12)
+        out = torch.max(out1, out2)
 
         out = self.final(out)
         out = F.interpolate(out, scale_factor=(2, 2), mode='bilinear', align_corners=True)  # b, num_class, H, W
 
         if self.gt_ds:
+            #这里gt需要改成合并之后的
             return (torch.sigmoid(gt_pre5), torch.sigmoid(gt_pre4), torch.sigmoid(gt_pre3), torch.sigmoid(gt_pre2),
                     torch.sigmoid(gt_pre1)), torch.sigmoid(out)
         else:
