@@ -8,9 +8,8 @@ from PIL import Image
 import numpy as np
 from datetime import datetime
 import argparse
-from utils.tools import rgb_to_grayscale, visualize_images, generate_edge_label
 
-# 导入三个模型（确保models文件夹中存在对应模块）
+# 导入模型
 from models.Unet import Unet
 from models.EdgeUnet import EdgeUnet
 from models.UnetPlusPlus import UnetPlusPlus
@@ -29,14 +28,12 @@ def save_mask(tensor, save_path):
     mask_img = Image.fromarray(mask_np, mode='L')
     mask_img.save(save_path)
 
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="unet", choices=["unet", "unet++", "edgeunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_epoch_150.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()
@@ -50,7 +47,7 @@ if __name__ == '__main__':
         transforms.ToTensor(),
     ])
 
-    # 创建测试数据集（假设数据集结构为 data_dir/test/images & data_dir/test/masks）
+    # 创建测试数据集
     test_dataset = ToothDataset(data_dir=args.data_dir, split="test", transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
@@ -66,8 +63,7 @@ if __name__ == '__main__':
                         input_channels=3,
                         c_list=[8, 16, 24, 32, 48, 64],
                         bridge=True,
-                        gt_ds=True,
-                        )
+                        gt_ds=True)
     else:
         raise ValueError("Unsupported model type")
     model.to(device)
@@ -77,8 +73,7 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(args.checkpoint, map_location=device))
         print(f"Loaded model weights from {args.checkpoint}")
     else:
-        print(f"Checkpoint not found at {args.checkpoint}.")
-        raise ValueError("Checkpoint not found")
+        raise FileNotFoundError(f"Checkpoint not found at {args.checkpoint}")
 
     # 从权重文件名中提取模型名称和 epoch 信息
     base_name = os.path.basename(args.checkpoint)
@@ -96,26 +91,29 @@ if __name__ == '__main__':
 
     model.eval()
     global_idx = 0
+    sigmoid = nn.Sigmoid()  # 添加 Sigmoid 激活函数
     with torch.no_grad():
         for batch_idx, (inputs, _) in enumerate(test_loader):
             inputs = inputs.to(device)
-            # 如果模型有多个输出（例如EdgeUNet返回(seg_out, edge_out)），取第一个作为分割结果
-            if model.name == "edgeunet":
+            # 处理不同模型的输出
+            if getattr(model, "name", None) == "edgeunet":
                 outputs, _ = model(inputs)
-            if model.name == "egeunet":
+            elif getattr(model, "name", None) == "egeunet":
                 _, outputs = model(inputs)
             else:
                 outputs = model(inputs)
-            # print(outputs)
-            # 使用 Sigmoid 激活转换 logits，并二值化（阈值 0.5）
-            preds = (outputs[0] > 0.5).float()
-            # batch_size = outputs.size(0)
-            batch_size = args.batch_size
 
+            # 将 logits 转换为概率并二值化
+            probs = sigmoid(outputs)  # [B, C, H, W]
+            preds = (probs > 0.5).float()  # [B, C, H, W]
+
+            batch_size = preds.size(0)  # 获取当前 batch 的实际大小
             for i in range(batch_size):
-                pred_mask = preds[i, 0, :, :]  # 尺寸为 [H, W]
-                save_filename = f"{global_idx}.png"
+                pred_mask = preds[i, 0, :, :]  # 提取单张掩码 [H, W]
+                save_filename = f"pred_{global_idx}.png"  # 改进命名
                 save_path = os.path.join(results_dir, save_filename)
                 save_mask(pred_mask, save_path)
                 print(f"Saved mask: {save_path}")
                 global_idx += 1
+
+    print(f"Testing complete. Predicted masks saved to {results_dir}")

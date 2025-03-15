@@ -45,7 +45,7 @@ class LayerNorm(nn.Module):
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
 
-# 
+
 # class group_aggregation_bridge(nn.Module):
 #     def __init__(self, dim_xh, dim_xl, k_size=3, d_list=[1,2,5,7]):
 #         super().__init__()
@@ -225,83 +225,83 @@ class EGEUNet(nn.Module):
         self.gt_ds = gt_ds
 
         self.encoder1 = nn.Sequential(
-            nn.Conv2d(input_channels, c_list[0], 3, stride=1, padding=1),
+            nn.Conv2d(input_channels, 8, 3, stride=1, padding=1),
         )
         self.encoder2 = nn.Sequential(
-            nn.Conv2d(c_list[0], c_list[1], 3, stride=1, padding=1),
+            nn.Conv2d(8, 16, 3, stride=1, padding=1),
         )
         self.encoder3 = nn.Sequential(
-            nn.Conv2d(c_list[1], c_list[2], 3, stride=1, padding=1),
-            ConvLayer(c_list[2]),
+            nn.Conv2d(16, 24, 3, stride=1, padding=1),
+            ConvLayer(24),
         )
         self.encoder4 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[2], c_list[3]),
+            Grouped_multi_axis_Hadamard_Product_Attention(24, 32),
         )
         self.encoder5 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[3], c_list[4]),
+            Grouped_multi_axis_Hadamard_Product_Attention(32, 48),
         )
         self.encoder6 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[4], c_list[5]),
+            Grouped_multi_axis_Hadamard_Product_Attention(48, 64),
         )
 
-        self.Down1 = Down(c_list[0])
-        self.Down2 = Down(c_list[1])
-        self.Down3 = Down(c_list[2])
+        self.Down1 = Down(8)
+        self.Down2 = Down(16)
+        self.Down3 = Down(24)
 
-        self.merge1 = Merge(c_list[0])
-        self.merge2 = Merge(c_list[1])
-        self.merge3 = Merge(c_list[2])
-        self.merge4 = Merge(c_list[3])
-        self.merge5 = Merge(c_list[4])
+        self.merge1 = Merge(8)
+        self.merge2 = Merge(16)
+        self.merge3 = Merge(24)
+        self.merge4 = Merge(32)
+        self.merge5 = Merge(48)
 
-        self.pred1 = Image_Prediction_Generator(c_list[4])
-        self.pred2 = Image_Prediction_Generator(c_list[3])
-        self.pred3 = Image_Prediction_Generator(c_list[2])
-        self.pred4 = Image_Prediction_Generator(c_list[1])
-        self.pred5 = Image_Prediction_Generator(c_list[0])
+        self.pred1 = Image_Prediction_Generator(48)
+        self.pred2 = Image_Prediction_Generator(32)
+        self.pred3 = Image_Prediction_Generator(24)
+        self.pred4 = Image_Prediction_Generator(16)
+        self.pred5 = Image_Prediction_Generator(8)
 
         # if bridge:
-        #     self.GAB1 = group_aggregation_bridge(c_list[1], c_list[0])
-        #     self.GAB2 = group_aggregation_bridge(c_list[2], c_list[1])
-        #     self.GAB3 = group_aggregation_bridge(c_list[3], c_list[2])
-        #     self.GAB4 = group_aggregation_bridge(c_list[4], c_list[3])
-        #     self.GAB5 = group_aggregation_bridge(c_list[5], c_list[4])
+        #     self.GAB1 = group_aggregation_bridge(16, 8)
+        #     self.GAB2 = group_aggregation_bridge(24, 16)
+        #     self.GAB3 = group_aggregation_bridge(32, 24)
+        #     self.GAB4 = group_aggregation_bridge(48, 32)
+        #     self.GAB5 = group_aggregation_bridge(64, 48)
         #     print('group_aggregation_bridge was used')
         # if gt_ds:
-        #     self.gt_conv1 = nn.Sequential(nn.Conv2d(c_list[4], 1, 1))
-        #     self.gt_conv2 = nn.Sequential(nn.Conv2d(c_list[3], 1, 1))
-        #     self.gt_conv3 = nn.Sequential(nn.Conv2d(c_list[2], 1, 1))
-        #     self.gt_conv4 = nn.Sequential(nn.Conv2d(c_list[1], 1, 1))
-        #     self.gt_conv5 = nn.Sequential(nn.Conv2d(c_list[0], 1, 1))
+        #     self.gt_conv1 = nn.Sequential(nn.Conv2d(48, 1, 1))
+        #     self.gt_conv2 = nn.Sequential(nn.Conv2d(32, 1, 1))
+        #     self.gt_conv3 = nn.Sequential(nn.Conv2d(24, 1, 1))
+        #     self.gt_conv4 = nn.Sequential(nn.Conv2d(16, 1, 1))
+        #     self.gt_conv5 = nn.Sequential(nn.Conv2d(8, 1, 1))
         #     print('gt deep supervision was used')
 
         self.decoder1 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[5], c_list[4]),
+            Grouped_multi_axis_Hadamard_Product_Attention(64, 48),
         )
         self.decoder2 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[4], c_list[3]),
+            Grouped_multi_axis_Hadamard_Product_Attention(48, 32),
         )
         self.decoder3 = nn.Sequential(
-            Grouped_multi_axis_Hadamard_Product_Attention(c_list[3], c_list[2]),
+            Grouped_multi_axis_Hadamard_Product_Attention(32, 24),
         )
         self.decoder4 = nn.Sequential(
-            nn.Conv2d(c_list[2], c_list[1], 3, stride=1, padding=1),
+            nn.Conv2d(24, 16, 3, stride=1, padding=1),
         )
         self.decoder5 = nn.Sequential(
-            nn.Conv2d(c_list[1], c_list[0], 3, stride=1, padding=1),
+            nn.Conv2d(16, 8, 3, stride=1, padding=1),
         )
-        self.ebn1 = nn.GroupNorm(4, c_list[0])
-        self.ebn2 = nn.GroupNorm(4, c_list[1])
-        self.ebn3 = nn.GroupNorm(4, c_list[2])
-        self.ebn4 = nn.GroupNorm(4, c_list[3])
-        self.ebn5 = nn.GroupNorm(4, c_list[4])
-        self.dbn1 = nn.GroupNorm(4, c_list[4])
-        self.dbn2 = nn.GroupNorm(4, c_list[3])
-        self.dbn3 = nn.GroupNorm(4, c_list[2])
-        self.dbn4 = nn.GroupNorm(4, c_list[1])
-        self.dbn5 = nn.GroupNorm(4, c_list[0])
+        self.ebn1 = nn.GroupNorm(4, 8)
+        self.ebn2 = nn.GroupNorm(4, 16)
+        self.ebn3 = nn.GroupNorm(4, 24)
+        self.ebn4 = nn.GroupNorm(4, 32)
+        self.ebn5 = nn.GroupNorm(4, 48)
+        self.dbn1 = nn.GroupNorm(4, 48)
+        self.dbn2 = nn.GroupNorm(4, 32)
+        self.dbn3 = nn.GroupNorm(4, 24)
+        self.dbn4 = nn.GroupNorm(4, 16)
+        self.dbn5 = nn.GroupNorm(4, 8)
 
-        self.final = nn.Conv2d(c_list[0], num_classes, kernel_size=1)
+        self.final = nn.Conv2d(8, num_classes, kernel_size=1)
 
         self.apply(self._init_weights)
 

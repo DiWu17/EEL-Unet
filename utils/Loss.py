@@ -94,6 +94,7 @@ class edge_bacediceloss(nn.Module):
         self.bcedice = BceDiceLoss(wb, wd)
 
     def forward(self, gt_pre, out, target):
+        # print(out.shape, target.shape)
         bcediceloss = self.bcedice(out, target)
         gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
 

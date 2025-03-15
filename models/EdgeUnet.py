@@ -5,6 +5,38 @@ import torch.nn.functional as F
 from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
 
 
+def interleave_tensors(tensor1, tensor2, dim=0):
+    """
+    将两个张量按照指定维度交错拼接。
+
+    参数：
+        tensor1: 第一个输入张量
+        tensor2: 第二个输入张量
+        dim: 指定交错的维度，默认为0
+
+    返回：
+        交错拼接后的张量
+
+    要求：
+        tensor1 和 tensor2 的形状必须相同
+    """
+    # 检查输入张量的形状是否相同
+    if tensor1.shape != tensor2.shape:
+        raise ValueError("两个张量的形状必须相同")
+
+    # 获取张量的形状和指定维度的长度
+    shape = list(tensor1.shape)
+    dim_size = shape[dim]
+
+    # 将两个张量沿着指定维度堆叠
+    stacked = torch.stack([tensor1, tensor2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
+
+    # 重塑张量，使得交错的元素按顺序排列
+    new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
+    interleaved = stacked.reshape(new_shape)
+
+    return interleaved
+
 class HighFourierTransform(nn.Module):
     def __init__(self, mask_range=20):
         """
@@ -89,6 +121,14 @@ class LayerNorm(nn.Module):
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
 
+class Merge(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x1, x2, gt_pre, w):
+        x = x1 + x2 + torch.sigmoid(gt_pre) * x2 * w
+        return x
+
 class Grouped_multi_axis_Hadamard_Product_Attention(nn.Module):
     def __init__(self, dim_in, dim_out, x=8, y=8):
         super().__init__()
@@ -156,6 +196,53 @@ class Grouped_multi_axis_Hadamard_Product_Attention(nn.Module):
         return x
 
 
+
+class group_aggregation_bridge(nn.Module):
+    def __init__(self, dim_xh, dim_xl, k_size=3, d_list=[1,2,5,7]):
+        super().__init__()
+        self.pre_project = nn.Conv2d(dim_xh, dim_xl, 1)
+        group_size = dim_xl // 2
+        self.g0 = nn.Sequential(
+            LayerNorm(normalized_shape=group_size+1, data_format='channels_first'),
+            nn.Conv2d(group_size + 1, group_size + 1, kernel_size=3, stride=1,
+                      padding=(k_size+(k_size-1)*(d_list[0]-1))//2,
+                      dilation=d_list[0], groups=group_size + 1)
+        )
+        self.g1 = nn.Sequential(
+            LayerNorm(normalized_shape=group_size+1, data_format='channels_first'),
+            nn.Conv2d(group_size + 1, group_size + 1, kernel_size=3, stride=1,
+                      padding=(k_size+(k_size-1)*(d_list[1]-1))//2,
+                      dilation=d_list[1], groups=group_size + 1)
+        )
+        self.g2 = nn.Sequential(
+            LayerNorm(normalized_shape=group_size+1, data_format='channels_first'),
+            nn.Conv2d(group_size + 1, group_size + 1, kernel_size=3, stride=1,
+                      padding=(k_size+(k_size-1)*(d_list[2]-1))//2,
+                      dilation=d_list[2], groups=group_size + 1)
+        )
+        self.g3 = nn.Sequential(
+            LayerNorm(normalized_shape=group_size+1, data_format='channels_first'),
+            nn.Conv2d(group_size + 1, group_size + 1, kernel_size=3, stride=1,
+                      padding=(k_size+(k_size-1)*(d_list[3]-1))//2,
+                      dilation=d_list[3], groups=group_size + 1)
+        )
+        self.tail_conv = nn.Sequential(
+            LayerNorm(normalized_shape=dim_xl * 2 + 4, data_format='channels_first'),
+            nn.Conv2d(dim_xl * 2 + 4, dim_xl, 1)
+        )
+    def forward(self, xh, xl, mask):
+        xh = self.pre_project(xh)
+        xh = F.interpolate(xh, size=[xl.size(2), xl.size(3)], mode ='bilinear', align_corners=True)
+        xh = torch.chunk(xh, 4, dim=1)
+        xl = torch.chunk(xl, 4, dim=1)
+        x0 = self.g0(torch.cat((xh[0], xl[0], mask), dim=1))
+        x1 = self.g1(torch.cat((xh[1], xl[1], mask), dim=1))
+        x2 = self.g2(torch.cat((xh[2], xl[2], mask), dim=1))
+        x3 = self.g3(torch.cat((xh[3], xl[3], mask), dim=1))
+        x = torch.cat((x0,x1,x2,x3), dim=1)
+        x = self.tail_conv(x)
+        return x
+
 class EdgeUnet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(EdgeUnet, self).__init__()
@@ -198,63 +285,42 @@ class EdgeUnet(nn.Module):
         self.dec1 = self.conv_block(128, 64)
 
         # 最终输出层（语义分割结果）
-        self.final_conv = nn.Sequential(
-            HighFourierTransform(),
-            nn.Conv2d(64, out_channels, kernel_size=1),
-        )
+        # self.final_conv = nn.Sequential(
+        #     # HighFourierTransform(),
+        #     nn.Conv2d(64, out_channels, kernel_size=1),
+        # )
 
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
-
-        self.edge_conv_5 = nn.Conv2d(1024, 1, kernel_size=1)
-        self.edge_conv_4 = nn.Conv2d(512, 1, kernel_size=1)
-        self.edge_conv_3 = nn.Conv2d(256, 1, kernel_size=1)
-        self.edge_conv_2 = nn.Conv2d(128, 1, kernel_size=1)
-        self.edge_conv_1 = nn.Conv2d(64, 1, kernel_size=1)
-
         self.pred5 = Image_Prediction_Generator(1024)
         self.pred4 = Image_Prediction_Generator(512)
         self.pred3 = Image_Prediction_Generator(256)
         self.pred2 = Image_Prediction_Generator(128)
         self.pred1 = Image_Prediction_Generator(64)
 
-
-
         self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
+                                           # HighFourierTransform(),
                                            Grouped_multi_axis_Hadamard_Product_Attention(512, 512))
         self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
+                                           # HighFourierTransform(),
                                            Grouped_multi_axis_Hadamard_Product_Attention(256, 256))
 
         self.edge_upconv_2 = nn.Sequential(self.upconv_block(256, 128),
+                                           HighFourierTransform(),
                                            self.conv_block(128, 128))
         self.edge_upconv_1 = nn.Sequential(self.upconv_block(128, 64),
+                                           HighFourierTransform(),
                                            self.conv_block(64, 64))
-        # self.edge_final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
-        self.edge_final_conv = nn.Sequential(
-            # HighFourierTransform(),
-            nn.Conv2d(64, out_channels, kernel_size=1),
-        )
+        
+        # self.edge_final_conv = nn.Sequential(
+        #     HighFourierTransform(),
+        #     nn.Conv2d(64, out_channels, kernel_size=1),
+        # )
 
-        # self.edge_enc1 = nn.Sequential(
-        #     HighFourierTransform(),
-        #     self.conv_block(in_channels, 64),
-        # )
-        # self.edge_enc2 = nn.Sequential(
-        #     HighFourierTransform(),
-        #     self.conv_block(64, 128),
-        # )
-        # self.edge = nn.Sequential(
-        #     HighFourierTransform(),
-        #     self.conv_block(128, 256),
-        # )
-        # self.edge_enc4 = nn.Sequential(
-        #     HighFourierTransform(),
-        #     self.conv_block(256, 512),
-        # )
-        # self.edge_bottleneck = nn.Sequential(
-        #     HighFourierTransform(),
-        #     self.conv_block(512, 1024)
-        # )
+        self.final = nn.Sequential(
+            LayerNorm(normalized_shape=128, data_format='channels_first'),
+            nn.Conv2d(128, out_channels, 1)
+        )
 
 
     def conv_block(self, in_channels, out_channels):
@@ -297,64 +363,66 @@ class EdgeUnet(nn.Module):
         bottleneck = self.bottleneck(bottleneck)
 
         bottleneck, edge_5 = self.pred5(bottleneck)
+
+
+
+        # 辅助分支
+        edge_dec4 = self.edge_upconv_4(bottleneck)
+        edge_dec3 = self.edge_upconv_3(edge_dec4)
+        edge_dec2 = self.edge_upconv_2(edge_dec3)
+        edge_dec1 = self.edge_upconv_1(edge_dec2)
+
+
         # 解码器部分
         dec4 = self.upconv4(bottleneck)
+        dec4 = torch.add(dec4, edge_dec4)
         enc4_crop = self.center_crop(enc4, dec4.size())
-        dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
+        # dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
+        dec4 = interleave_tensors(dec4, enc4_crop, dim=1)
         dec4 = self.dec4(dec4)
 
         dec3, edge_4 = self.pred4(dec4)
         dec3 = self.upconv3(dec3)
+        dec3 = torch.add(dec3, edge_dec3)
         enc3_crop = self.center_crop(enc3, dec3.size())
-        dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
+        # dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
+        dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
         dec3 = self.dec3(dec3)
 
         dec2, edge_3 = self.pred3(dec3)
         dec2 = self.upconv2(dec2)
+        dec2 = torch.add(dec2, edge_dec2)
         enc2_crop = self.center_crop(enc2, dec2.size())
-        dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
+        # dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
+        dec2 = interleave_tensors(dec2, enc2_crop, dim=1)
         dec2 = self.dec2(dec2)
 
         dec1, edge_2 = self.pred2(dec2)
         dec1 = self.upconv1(dec1)
+        dec1 = torch.add(dec1, edge_dec1)
         enc1_crop = self.center_crop(enc1, dec1.size())
-        dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
+        # dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
+        dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
         dec1 = self.dec1(dec1)
 
         seg_out, edge_1 = self.pred1(dec1)
-        seg_out = self.final_conv(dec1)
-        # 主分支输出：语义分割结果
+
+
+        # visualize_images(edge_dec2.cpu().detach().numpy(), "edge_dec2")
+        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
+
+        # seg_out = torch.cat([seg_out, edge_dec2], dim=1)
+        seg_out = interleave_tensors(seg_out, edge_dec1, dim=1)
+
+        seg_out = self.final(seg_out)
+        # seg_out = HighFourierTransform()(seg_out)
+
         seg_out = torch.sigmoid(seg_out)
 
-
-        # 辅助分支
-        # edge_enc1 = self.edge_enc1(x)
-        # edge_enc2 = nn.MaxPool2d(kernel_size=2)(edge_enc1)
-        # edge_enc2 = self.edge_enc2(edge_enc2)
-        # edge_enc3 = nn.MaxPool2d(kernel_size=2)(edge_enc2)
-        # edge_enc3 = self.edge(edge_enc3)
-        # edge_enc4 = nn.MaxPool2d(kernel_size=2)(edge_enc3)
-        # edge_enc4 = self.edge_enc4(edge_enc4)
-        # edge_bottleneck = nn.MaxPool2d(kernel_size=2)(edge_enc4)
-        # edge_bottleneck = self.edge_bottleneck(bottleneck)
-        edge_dec5 = self.edge_upconv_4(bottleneck)
-        edge_dec4 = self.edge_upconv_3(edge_dec5)
-        edge_dec3 = self.edge_upconv_2(edge_dec4)
-        edge_dec2 = self.edge_upconv_1(edge_dec3)
-
-        edge_out = self.edge_final_conv(edge_dec2)
-        # visualize_images(edge_out.cpu().detach().numpy(), "first")
-        # edge_out = HighFourierTransform()(edge_out)
-        # visualize_images(edge_out.cpu().detach().numpy(), "second")
-        edge_out = torch.sigmoid(edge_out)
-        # visualize_images(edge_out.cpu().detach().numpy(), "third")
-
-        # visualize_images(edge_out.cpu().detach().numpy(), "edge_out")
-        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
-        # seg_out = torch.min(seg_out + edge_out, torch.ones_like(seg_out))
-        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
-        calculate_contribution(seg_out, edge_out)
-        seg_out = torch.max(seg_out, edge_out)
+        # seg_out = self.final_conv(dec1)
+        # edge_out = self.edge_final_conv(edge_dec2)
+        # edge_out = torch.sigmoid(edge_out)
+        # seg_out = torch.max(seg_out, edge_out)
 
         return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
     # def forward(self, x):
@@ -490,11 +558,10 @@ class EdgeUnet(nn.Module):
     #     # return seg_out, binary_edge_out
     #     return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
 
-
 # Example of how to use
 if __name__ == "__main__":
     model = EdgeUnet(in_channels=3, out_channels=1)
-    x = torch.randn(1, 3, 256, 256)  # Example input tensor
+    x = torch.randn(1, 3, 256, 256)
     seg_out, edge_outs = model(x)
     # print(seg_out.shape) # Expected to be [1, 1, 256, 256]
     # print(edge_outs[0].shape) # Expected to be [1, 1, 16, 16]
