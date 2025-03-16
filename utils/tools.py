@@ -5,10 +5,43 @@ import torch
 import torch.nn.functional as F
 import math
 
-
-
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+def interleave_tensors(tensor1, tensor2, dim=0):
+    """
+    将两个张量按照指定维度交错拼接。
+
+    参数：
+        tensor1: 第一个输入张量
+        tensor2: 第二个输入张量
+        dim: 指定交错的维度，默认为0
+
+    返回：
+        交错拼接后的张量
+
+    要求：
+        tensor1 和 tensor2 的形状必须相同
+    """
+    # 检查输入张量的形状是否相同
+    if tensor1.shape != tensor2.shape:
+        raise ValueError("两个张量的形状必须相同")
+
+    # 获取张量的形状和指定维度的长度
+    shape = list(tensor1.shape)
+    dim_size = shape[dim]
+
+    # 将两个张量沿着指定维度堆叠
+    stacked = torch.stack([tensor1, tensor2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
+
+    # 重塑张量，使得交错的元素按顺序排列
+    new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
+    interleaved = stacked.reshape(new_shape)
+
+    return interleaved
+
+
 def visualize_images(arr, title="Images"):
     """
     可视化形状为 (batch_size, channels, height, width) 的图像数组。
@@ -72,6 +105,7 @@ def visualize_images(arr, title="Images"):
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 
+
 def generate_edge_label(gt):
     """
     gt: numpy数组格式的单通道分割标签，形状为 (N, 1, H, W)，数据类型可以不是 uint8
@@ -89,7 +123,7 @@ def generate_edge_label(gt):
     for i in range(N):
         # visualize_image_np(gt[i, 0], "Ground Truth Images")
         # 去除通道维度，得到 (H, W) 的图像
-        single_img = (gt[i, 0]*255).astype(np.uint8)
+        single_img = (gt[i, 0] * 255).astype(np.uint8)
         # 使用 Canny 算子提取边缘
         edges = cv2.Canny(single_img, threshold1=100, threshold2=200)
         # visualize_image_np(edges, "Edge Images")
@@ -175,8 +209,6 @@ def rgb_to_grayscale(batch):
     # 按照加权公式转换为灰度图
     gray = 0.299 * r + 0.587 * g + 0.114 * b
     return gray
-
-
 
 
 def gaussian_kernel(kernel_size=5, sigma=1.0, channels=1):

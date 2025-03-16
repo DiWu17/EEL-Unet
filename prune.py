@@ -218,7 +218,7 @@ if __name__ == '__main__':
     if args.model_type == "edgeunet":
         model = EdgeUnet(in_channels=3, out_channels=1)
     else:
-        raise ValueError("Only EdgeUnet is supported for pruning in this example")
+        raise ValueError("Only EELUnet is supported for pruning in this example")
 
     model.to(device)
     summary(model, (3, 256, 256))

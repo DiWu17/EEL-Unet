@@ -7,14 +7,16 @@ from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 
-from utils.tools import *
 
 from models.Unet import Unet
-from models.EdgeUnet import EdgeUnet
+from models.EELUnet import EELUnet
 from models.UnetPlusPlus import UnetPlusPlus
 from models.egeunet import EGEUNet
+from models.unext import UNext, UNext_S
+from models.malunet import MALUNet
 
 from utils.Loss import *
+from utils.tools import *
 
 from data.ToothDataset import ToothDataset
 from evaluate import evaluate
@@ -48,8 +50,7 @@ def val_one_epoch(model, val_loader, criterion, device):
 
 
 def calculate_loss(model, criterion, inputs, labels):
-    if model.name == "edgeunet":
-        # 生成边缘标签
+    if model.name == "eelunet":
         seg_out, edge_outs = model(inputs)
         loss = criterion(edge_outs, seg_out, labels)
     elif model.name == "unet":
@@ -61,6 +62,12 @@ def calculate_loss(model, criterion, inputs, labels):
     elif model.name == "egeunet":
         gt_pre, out = model(inputs)
         loss = criterion(gt_pre, out, labels)
+    elif model.name == "unext" or model.name == "unext_s":
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+    elif model.name == "malunet":
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
     else:
         raise ValueError("Unsupported model type")
     return loss
@@ -77,9 +84,9 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
     log_dir = os.path.join(log_dir, model.name, current_date)
     writer = SummaryWriter(log_dir=log_dir)
 
-    max_pixel_accuracy = 0.0
-    max_precision = 0.0
-    min_recall = 1.0
+    # max_pixel_accuracy = 0.0
+    # max_precision = 0.0
+    # min_recall = 1.0
     max_f1_score = 0.0
     max_iou = 0.0
     max_dice = 0.0
@@ -101,9 +108,9 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
         pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1 = evaluate(model, test_loader, device)
 
         # Log the metrics to TensorBoard
-        writer.add_scalar('Metrics/Pixel Accuracy', pixel_accuracy, epoch + 1)
-        writer.add_scalar('Metrics/Precision', precision, epoch + 1)
-        writer.add_scalar('Metrics/Recall', recall, epoch + 1)
+        # writer.add_scalar('Metrics/Pixel Accuracy', pixel_accuracy, epoch + 1)
+        # writer.add_scalar('Metrics/Precision', precision, epoch + 1)
+        # writer.add_scalar('Metrics/Recall', recall, epoch + 1)
         writer.add_scalar('Metrics/F1 Score', f1_score, epoch + 1)
         writer.add_scalar('Metrics/IoU', iou, epoch + 1)
         writer.add_scalar('Metrics/Dice', dice, epoch + 1)
@@ -111,18 +118,18 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
         writer.add_scalar('Metrics/Boundary F1', boundary_f1, epoch + 1)
 
         # 保存最佳权重
-        if pixel_accuracy > max_pixel_accuracy:
-            max_pixel_accuracy = pixel_accuracy
-            save_path = os.path.join(save_dir, f'{model.name}_best_pixel_accuracy.pth')
-            torch.save(model.state_dict(), save_path)
-        if precision > max_precision:
-            max_precision = precision
-            save_path = os.path.join(save_dir, f'{model.name}_best_precision.pth')
-            torch.save(model.state_dict(), save_path)
-        if recall < min_recall:
-            min_recall = recall
-            save_path = os.path.join(save_dir, f'{model.name}_best_recall.pth')
-            torch.save(model.state_dict(), save_path)
+        # if pixel_accuracy > max_pixel_accuracy:
+        #     max_pixel_accuracy = pixel_accuracy
+        #     save_path = os.path.join(save_dir, f'{model.name}_best_pixel_accuracy.pth')
+        #     torch.save(model.state_dict(), save_path)
+        # if precision > max_precision:
+        #     max_precision = precision
+        #     save_path = os.path.join(save_dir, f'{model.name}_best_precision.pth')
+        #     torch.save(model.state_dict(), save_path)
+        # if recall < min_recall:
+        #     min_recall = recall
+        #     save_path = os.path.join(save_dir, f'{model.name}_best_recall.pth')
+        #     torch.save(model.state_dict(), save_path)
         if f1_score > max_f1_score:
             max_f1_score = f1_score
             save_path = os.path.join(save_dir, f'{model.name}_best_f1_score.pth')
@@ -153,9 +160,9 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
               f'Train Loss: {epoch_train_loss:.4f}\t'
               f'Val Loss: {epoch_val_loss:.4f}\t'
               f'lr: {optimizer.param_groups[0]["lr"]} ',
-              f'Pixel Accuracy: {pixel_accuracy:.4f}\t'
-              f'Precision: {precision:.4f}\t'
-              f'Recall: {recall:.4f}\t'
+              # f'Pixel Accuracy: {pixel_accuracy:.4f}\t'
+              # f'Precision: {precision:.4f}\t'
+              # f'Recall: {recall:.4f}\t'
               f'F1 Score: {f1_score:.4f}\t'
               f'IoU: {iou:.4f}\t'
               f'Dice: {dice:.4f}\t'
@@ -169,10 +176,10 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
             torch.save(model.state_dict(), save_path)
 
     print("Training complete.")
-    print("Best Metrics:" 
-          f"Pixel Accuracy: {max_pixel_accuracy:.4f}\t"
-          f"Precision: {max_precision:.4f}\t"
-          f"Recall: {min_recall:.4f}\t"
+    print("Best Metrics:"
+          # f"Pixel Accuracy: {max_pixel_accuracy:.4f}\t"
+          # f"Precision: {max_precision:.4f}\t"
+          # f"Recall: {min_recall:.4f}\t"
           f"F1 Score: {max_f1_score:.4f}\t"
           f"IoU: {max_iou:.4f}\t"
           f"Dice: {max_dice:.4f}\t"
@@ -183,8 +190,8 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train segmentation model with edge supervision")
-    parser.add_argument("--model_type", type=str, default="edgeunet",
-                        choices=["unet", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="eelunet",
+                        choices=["unet", "eelunet", "egeunet", "unext", "unext_s", "malunet"],
                         help="选择模型类型")
     # parser.add_argument("--data_dir", type=str, default="F:/Datasets/2DSegmentation/ISIC2017", help="数据集目录")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
@@ -201,14 +208,10 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-
     # 数据预处理
     transform = transforms.Compose([
         transforms.Resize((256, 256)),  # 调整图像大小
-        # transforms.RandomHorizontalFlip(),  # 随机水平翻转
-        # transforms.RandomRotation(20),
         transforms.ToTensor(),  # 将图像转化为Tensor
-        # transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])  # 归一化
     ])
 
     # 创建数据集
@@ -227,8 +230,8 @@ if __name__ == '__main__':
     # 根据命令行选择模型
     if args.model_type == "unet":
         model = Unet(in_channels=3, out_channels=1)
-    elif args.model_type == "edgeunet":
-        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "eelunet":
+        model = EELUnet(in_channels=3, out_channels=1)
     elif args.model_type == "unet++":
         model = UnetPlusPlus(in_channels=3, out_channels=1)
     elif args.model_type == "egeunet":
@@ -238,27 +241,37 @@ if __name__ == '__main__':
                         bridge=True,
                         gt_ds=True,
                         )
+    elif args.model_type == "unext":
+        model = UNext(num_classes=1, in_channels=3)
+    elif args.model_type == "unext_s":
+        model = UNext_S(num_classes=1, in_channels=3)
+    elif args.model_type == "malunet":
+        model = MALUNet(num_classes=1, input_channels=3)
     else:
         raise ValueError("Unsupported model type")
 
     model.to(device)
     summary(model, (3, 256, 256))
-    #
+
+    # 加载预训练权重
     # checkpoint_path = "checkpoints/edgeunet/edgeunet_epoch_200.pth"
     # if os.path.exists(checkpoint_path):
     #     print(f"Loading pretrained weights from {checkpoint_path}")
     #     model.load_state_dict(torch.load(checkpoint_path))
 
-    # 损失函数与优化器
+    # 损失函数
     # criterion = nn.BCEWithLogitsLoss()
     # criterion = GT_BceDiceLoss(wb=1, wd=1)
     criterion = edge_bacediceloss(wb=1, wd=1)
 
+    # 优化器
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     # optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.90, weight_decay=1e-5)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
+    # 学习率调度器
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 
+    # 训练
     train(model, train_loader, val_loader, test_loader, criterion, optimizer, device,
           num_epochs=args.epochs, save_dir=args.save_dir, log_dir=args.log_dir, lambda_edge=args.lambda_edge)

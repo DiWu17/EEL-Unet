@@ -11,7 +11,7 @@ import argparse
 
 # 导入模型
 from models.Unet import Unet
-from models.EdgeUnet import EdgeUnet
+from models.EELUnet import EELUnet
 from models.UnetPlusPlus import UnetPlusPlus
 from models.egeunet import EGEUNet
 
@@ -30,10 +30,10 @@ def save_mask(tensor, save_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="unet", choices=["unet", "unet++", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="unet", choices=["unet", "unet++", "eelunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/EELunet/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()
@@ -54,8 +54,8 @@ if __name__ == '__main__':
     # 根据模型类型选择模型
     if args.model_type == "unet":
         model = Unet(in_channels=3, out_channels=1)
-    elif args.model_type == "edgeunet":
-        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "eelunet":
+        model = EELUnet(in_channels=3, out_channels=1)
     elif args.model_type == "unet++":
         model = UnetPlusPlus(in_channels=3, out_channels=1)
     elif args.model_type == "egeunet":
@@ -96,7 +96,7 @@ if __name__ == '__main__':
         for batch_idx, (inputs, _) in enumerate(test_loader):
             inputs = inputs.to(device)
             # 处理不同模型的输出
-            if getattr(model, "name", None) == "edgeunet":
+            if getattr(model, "name", None) == "eelunet":
                 outputs, _ = model(inputs)
             elif getattr(model, "name", None) == "egeunet":
                 _, outputs = model(inputs)

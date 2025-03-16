@@ -196,7 +196,6 @@ class SC_Att_Bridge(nn.Module):
 
 
 class MALUNet(nn.Module):
-
     def __init__(self, num_classes=1, input_channels=3, c_list=[8, 16, 24, 32, 48, 64],
                  split_att='fc', bridge=True):
         super().__init__()

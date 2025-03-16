@@ -12,7 +12,7 @@ from datetime import datetime
 
 # 导入模型（确保 models 文件夹中有对应模块）
 from models.Unet import Unet
-from models.EdgeUnet import EdgeUnet
+from models.EELUnet import EELUnet
 from models.UnetPlusPlus import UnetPlusPlus
 from models.egeunet import EGEUNet
 
@@ -77,8 +77,8 @@ def evaluate(model, dataloader, device):
             labels = labels.to(device)  # 假设 labels 尺寸为 [B, 1, H, W]，值为 0 或 1
 
             outputs = model(inputs)
-            # 如果模型返回多个输出（例如 EdgeUNet 返回 (seg_out, edge_out)），则取第一个作为分割预测
-            if model.name == "edgeunet":
+            # 如果模型返回多个输出，则取第一个作为分割预测
+            if model.name == "eelunet":
                 seg_out = outputs[0]
             elif model.name == "egeunet":
                 seg_out = outputs[1]
@@ -123,13 +123,13 @@ def evaluate(model, dataloader, device):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate segmentation model and output metrics")
-    parser.add_argument("--model_type", type=str, default="edgeunet", choices=["unet", "unet++", "edgeunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="eelunet", choices=["unet", "unet++", "eelunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="test", help="test")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/Unet-baseline/checkpoints/edgeunet/edgeunet_best_iou.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/EELunet/checkpoints/eelunet/eelunet_best_iou.pth", help="模型权重文件路径")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -145,8 +145,8 @@ if __name__ == '__main__':
 
     if args.model_type == "unet":
         model = Unet(in_channels=3, out_channels=1)
-    elif args.model_type == "edgeunet":
-        model = EdgeUnet(in_channels=3, out_channels=1)
+    elif args.model_type == "eelunet":
+        model = EELUnet(in_channels=3, out_channels=1)
     elif args.model_type == "unet++":
         model = UnetPlusPlus(in_channels=3, out_channels=1)
     elif args.model_type == "egeunet":
