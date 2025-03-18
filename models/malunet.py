@@ -200,6 +200,8 @@ class MALUNet(nn.Module):
                  split_att='fc', bridge=True):
         super().__init__()
 
+        self.name = "malunet"
+
         self.bridge = bridge
 
         self.encoder1 = nn.Sequential(

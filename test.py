@@ -33,7 +33,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_type", type=str, default="unet", choices=["unet", "unet++", "eelunet", "egeunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/EELunet/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/EELUnet/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()

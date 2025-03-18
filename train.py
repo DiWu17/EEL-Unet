@@ -96,7 +96,6 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
 
     for epoch in range(num_epochs):
         model.train()
-
         # 训练
         epoch_train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         scheduler.step()

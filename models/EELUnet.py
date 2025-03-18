@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary
-from utils.tools import canny_edge_torch, visualize_images, calculate_contribution, interleave_tensors
-
+from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
 
 
 class ShiftedChannel(nn.Module):
@@ -21,6 +20,7 @@ class ShiftedChannel(nn.Module):
             x[:, 3 * shift_size:],
         ], dim=1)
         return x_shifted
+
 
 # 令牌化MLP块
 class TokenizedMLPBlock(nn.Module):
@@ -44,6 +44,40 @@ class TokenizedMLPBlock(nn.Module):
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2)
         x = self.to_space(x)
         return x
+
+
+def interleave_tensors(tensor1, tensor2, dim=0):
+    """
+    将两个张量按照指定维度交错拼接。
+
+    参数：
+        tensor1: 第一个输入张量
+        tensor2: 第二个输入张量
+        dim: 指定交错的维度，默认为0
+
+    返回：
+        交错拼接后的张量
+
+    要求：
+        tensor1 和 tensor2 的形状必须相同
+    """
+    # 检查输入张量的形状是否相同
+    if tensor1.shape != tensor2.shape:
+        raise ValueError("两个张量的形状必须相同")
+
+    # 获取张量的形状和指定维度的长度
+    shape = list(tensor1.shape)
+    dim_size = shape[dim]
+
+    # 将两个张量沿着指定维度堆叠
+    stacked = torch.stack([tensor1, tensor2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
+
+    # 重塑张量，使得交错的元素按顺序排列
+    new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
+    interleaved = stacked.reshape(new_shape)
+
+    return interleaved
+
 
 class HighFourierTransform(nn.Module):
     def __init__(self, mask_range=20):
@@ -94,6 +128,7 @@ class HighFourierTransform(nn.Module):
 
         return img_back_h
 
+
 class Image_Prediction_Generator(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
@@ -104,6 +139,7 @@ class Image_Prediction_Generator(nn.Module):
         gt_pre = self.conv(x)
         x = x + x * torch.sigmoid(gt_pre)
         return x, torch.sigmoid(gt_pre)
+
 
 class LayerNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
@@ -125,6 +161,16 @@ class LayerNorm(nn.Module):
             x = (x - u) / torch.sqrt(s + self.eps)
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
+
+
+class Merge(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x1, x2, gt_pre, w):
+        x = x1 + x2 + torch.sigmoid(gt_pre) * x2 * w
+        return x
+
 
 class Grouped_multi_axis_Hadamard_Product_Attention(nn.Module):
     def __init__(self, dim_in, dim_out, x=8, y=8):
@@ -210,40 +256,28 @@ class EELUnet(nn.Module):
         )
         self.enc3 = nn.Sequential(
             self.conv_block(128, 256),
-            # self.mlp_conv_block(128, 256)
         )
         self.enc4 = nn.Sequential(
             self.conv_block(256, 512),
-            # self.mlp_conv_block(256, 512)
         )
 
         # 瓶颈层
-        # self.bottleneck = self.conv_block(512, 1024)
         self.bottleneck = self.mlp_conv_block(512, 1024)
 
         # 解码器部分
         self.upconv4 = self.upconv_block(1024, 512)
 
-        # self.conv4 = self.conv_block(1024, 512)
         self.dec4 = Grouped_multi_axis_Hadamard_Product_Attention(1024, 512)
-        # self.dec4 = TokenizedMLPBlock(1024, 512)
 
         self.upconv3 = self.upconv_block(512, 256)
 
-        # self.conv3 = self.conv_block(512, 256)
         self.dec3 = Grouped_multi_axis_Hadamard_Product_Attention(512, 256)
-        # self.dec3 = TokenizedMLPBlock(512, 256)
 
         self.upconv2 = self.upconv_block(256, 128)
         self.dec2 = self.conv_block(256, 128)
         self.upconv1 = self.upconv_block(128, 64)
         self.dec1 = self.conv_block(128, 64)
 
-        # 最终输出层（语义分割结果）
-        # self.final_conv = nn.Sequential(
-        #     # HighFourierTransform(),
-        #     nn.Conv2d(64, out_channels, kernel_size=1),
-        # )
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
         self.pred5 = Image_Prediction_Generator(1024)
@@ -253,14 +287,10 @@ class EELUnet(nn.Module):
         self.pred1 = Image_Prediction_Generator(64)
 
         self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
-                                           # HighFourierTransform(),
                                            Grouped_multi_axis_Hadamard_Product_Attention(512, 512),
-                                           # TokenizedMLPBlock(512, 512),
                                            )
         self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
-                                           # HighFourierTransform(),
-                                           Grouped_multi_axis_Hadamard_Product_Attention(256, 256),
-                                           # TokenizedMLPBlock(256, 256),
+                                           Grouped_multi_axis_Hadamard_Product_Attention(256, 256)
                                            )
 
         self.edge_upconv_2 = nn.Sequential(self.upconv_block(256, 128),
@@ -269,11 +299,6 @@ class EELUnet(nn.Module):
         self.edge_upconv_1 = nn.Sequential(self.upconv_block(128, 64),
                                            HighFourierTransform(),
                                            self.conv_block(64, 64))
-
-        # self.edge_final_conv = nn.Sequential(
-        #     HighFourierTransform(),
-        #     nn.Conv2d(64, out_channels, kernel_size=1),
-        # )
 
         self.final = nn.Sequential(
             LayerNorm(normalized_shape=128, data_format='channels_first'),
@@ -288,7 +313,6 @@ class EELUnet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            # nn.Dropout(p=0.2)  # 添加Dropout层
         )
 
     def mlp_conv_block(self, in_channels, out_channels):
@@ -296,9 +320,7 @@ class EELUnet(nn.Module):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
-            # nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            # nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             TokenizedMLPBlock(out_channels, out_channels),
             nn.ReLU(inplace=True),
             # nn.Dropout(p=0.2)  # 添加Dropout层
@@ -307,7 +329,6 @@ class EELUnet(nn.Module):
     def upconv_block(self, in_channels, out_channels):
         # 定义上采样块，使用反卷积层
         return nn.Sequential(
-            # nn.BatchNorm2d(in_channels),
             nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
             nn.BatchNorm2d(out_channels),
         )
@@ -345,7 +366,6 @@ class EELUnet(nn.Module):
         dec4 = self.upconv4(bottleneck)
         dec4 = torch.add(dec4, edge_dec4)
         enc4_crop = self.center_crop(enc4, dec4.size())
-        # dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
         dec4 = interleave_tensors(dec4, enc4_crop, dim=1)
         dec4 = self.dec4(dec4)
 
@@ -353,7 +373,6 @@ class EELUnet(nn.Module):
         dec3 = self.upconv3(dec3)
         dec3 = torch.add(dec3, edge_dec3)
         enc3_crop = self.center_crop(enc3, dec3.size())
-        # dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
         dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
         dec3 = self.dec3(dec3)
 
@@ -361,7 +380,6 @@ class EELUnet(nn.Module):
         dec2 = self.upconv2(dec2)
         dec2 = torch.add(dec2, edge_dec2)
         enc2_crop = self.center_crop(enc2, dec2.size())
-        # dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
         dec2 = interleave_tensors(dec2, enc2_crop, dim=1)
         dec2 = self.dec2(dec2)
 
@@ -369,163 +387,22 @@ class EELUnet(nn.Module):
         dec1 = self.upconv1(dec1)
         dec1 = torch.add(dec1, edge_dec1)
         enc1_crop = self.center_crop(enc1, dec1.size())
-        # dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
         dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
         dec1 = self.dec1(dec1)
 
         seg_out, edge_1 = self.pred1(dec1)
 
-        # visualize_images(edge_dec2.cpu().detach().numpy(), "edge_dec2")
-        # visualize_images(seg_out.cpu().detach().numpy(), "seg_out")
 
-        # seg_out = torch.cat([seg_out, edge_dec2], dim=1)
         seg_out = interleave_tensors(seg_out, edge_dec1, dim=1)
 
         seg_out = self.final(seg_out)
-        # seg_out = HighFourierTransform()(seg_out)
 
         seg_out = torch.sigmoid(seg_out)
 
-        # seg_out = self.final_conv(dec1)
-        # edge_out = self.edge_final_conv(edge_dec2)
-        # edge_out = torch.sigmoid(edge_out)
-        # seg_out = torch.max(seg_out, edge_out)
-
         return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
-    # def forward(self, x):
-    #     # 编码器部分
-    #     enc1 = self.enc1(x)
-    #     enc2 = nn.MaxPool2d(kernel_size=2)(enc1)
-    #     enc2 = self.enc2(enc2)
-    #     enc3 = nn.MaxPool2d(kernel_size=2)(enc2)
-    #     enc3 = self.enc3(enc3)
-    #     enc4 = nn.MaxPool2d(kernel_size=2)(enc3)
-    #     enc4 = self.enc4(enc4)
-    #     bottleneck = nn.MaxPool2d(kernel_size=2)(enc4)
-    #     bottleneck = self.bottleneck(bottleneck)
-    #
-    #     # 解码器部分
-    #     dec4 = self.upconv4(bottleneck)
-    #     enc4_crop = self.center_crop(enc4, dec4.size())
-    #     dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
-    #     dec4 = self.conv4(dec4)
-    #
-    #     dec3 = self.upconv3(dec4)
-    #     enc3_crop = self.center_crop(enc3, dec3.size())
-    #     dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
-    #     dec3 = self.conv3(dec3)
-    #
-    #     dec2 = self.upconv2(dec3)
-    #     enc2_crop = self.center_crop(enc2, dec2.size())
-    #     dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
-    #     dec2 = self.conv2(dec2)
-    #
-    #     dec1 = self.upconv1(dec2)
-    #     enc1_crop = self.center_crop(enc1, dec1.size())
-    #     dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
-    #     dec1 = self.conv1(dec1)
-    #
-    #     # 主分支输出：语义分割结果
-    #     seg_out = self.final_conv(dec1)
-    #     seg_out = torch.sigmoid(seg_out)
-    #
-    #     edge_5 = self.edge_conv_5(bottleneck)
-    #     edge_5 = torch.sigmoid(edge_5)
-    #
-    #     edge_4 = self.edge_conv_4(dec4)
-    #     edge_4 = torch.sigmoid(edge_4)
-    #
-    #     edge_3 = self.edge_conv_3(dec3)
-    #     edge_3 = torch.sigmoid(edge_3)
-    #
-    #     edge_2 = self.edge_conv_2(dec2)
-    #     edge_2 = torch.sigmoid(edge_2)
-    #
-    #     edge_1 = self.edge_conv_1(dec1)
-    #     edge_1 = torch.sigmoid(edge_1)
-    #
-    #     edge_dec5 = self.edge_upconv_4(bottleneck)
-    #     edge_dec4 = self.edge_upconv_3(edge_dec5)
-    #     edge_dec3 = self.edge_upconv_2(edge_dec4)
-    #     edge_dec2 = self.edge_upconv_1(edge_dec3)
-    #
-    #     edge_out = self.edge_final_conv(edge_dec2)
-    #     edge_out = torch.sigmoid(edge_out)
-    #
-    #     seg_out = torch.max(seg_out, edge_out)
-    #
-    #     return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
-    # def forward(self, x):
-    #     # 编码器部分
-    #     enc1 = self.enc1(x)
-    #     enc2 = nn.MaxPool2d(kernel_size=2)(enc1)
-    #     enc2 = self.enc2(enc2)
-    #     enc3 = nn.MaxPool2d(kernel_size=2)(enc2)
-    #     enc3 = self.enc3(enc3)
-    #     enc4 = nn.MaxPool2d(kernel_size=2)(enc3)
-    #     enc4 = self.enc4(enc4)
-    #     bottleneck = nn.MaxPool2d(kernel_size=2)(enc4)
-    #     bottleneck = self.bottleneck(bottleneck)
-    #
-    #     # 解码器部分
-    #     dec4 = self.upconv4(bottleneck)
-    #     enc4_crop = self.center_crop(enc4, dec4.size())
-    #     dec4 = torch.cat((dec4, enc4_crop), dim=1)  # 跳跃连接
-    #     dec4 = self.conv4(dec4)
-    #
-    #     dec3 = self.upconv3(dec4)
-    #     enc3_crop = self.center_crop(enc3, dec3.size())
-    #     dec3 = torch.cat((dec3, enc3_crop), dim=1)  # 跳跃连接
-    #     dec3 = self.conv3(dec3)
-    #
-    #     dec2 = self.upconv2(dec3)
-    #     enc2_crop = self.center_crop(enc2, dec2.size())
-    #     dec2 = torch.cat((dec2, enc2_crop), dim=1)  # 跳跃连接
-    #     dec2 = self.conv2(dec2)
-    #
-    #     dec1 = self.upconv1(dec2)
-    #     enc1_crop = self.center_crop(enc1, dec1.size())
-    #     dec1 = torch.cat((dec1, enc1_crop), dim=1)  # 跳跃连接
-    #     dec1 = self.conv1(dec1)
-    #
-    #     # 主分支输出：语义分割结果
-    #     seg_out = self.final_conv(dec1)
-    #     seg_out = torch.sigmoid(seg_out)
-    #
-    #     # 辅助分支输出：边缘预测
-    #     edge_5 = self.edge_conv_5(bottleneck)
-    #     edge_5 = torch.sigmoid(edge_5)
-    #
-    #     edge_4 = self.edge_conv_4(dec4)
-    #     edge_4 = torch.sigmoid(edge_4)
-    #
-    #     edge_3 = self.edge_conv_3(dec3)
-    #     edge_3 = torch.sigmoid(edge_3)
-    #
-    #     edge_2 = self.edge_conv_2(dec2)
-    #     edge_2 = torch.sigmoid(edge_2)
-    #
-    #     edge_1 = self.edge_conv_1(dec1)
-    #     edge_1 = torch.sigmoid(edge_1)
-    #
-    #     edge_out = self.edge_final_conv(dec1)
-    #     edge_out = torch.sigmoid(edge_out)
-    #
-    #     # seg_out与edge_out取值范围均为 [0,1]，将edge_out中比seg_out更大的值赋值给seg_out
-    #     seg_out = torch.max(seg_out, edge_out)
-    #
-    #
-    #
-    #     # binary_edge_out = canny_edge_torch_improve(binary_edge_out)
-    #     # binary_edge_out = generate_edge_label(binary_edge_out.cpu().numpy())
-    #
-    #
-    #
-    #
-    #     # return seg_out, binary_edge_out
-    #     return seg_out, [edge_5, edge_4, edge_3, edge_2, edge_1]
 
 
+# Example of how to use
 # 测试模型
 if __name__ == "__main__":
     model = EELUnet(in_channels=3, out_channels=1)

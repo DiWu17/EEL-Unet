@@ -389,3 +389,179 @@ class EGEUNet(nn.Module):
                     torch.sigmoid(gt_pre1)), torch.sigmoid(out)
         else:
             return torch.sigmoid(out)
+
+class EGEUNet_Large(nn.Module):
+
+    def __init__(self, num_classes=1, input_channels=3, c_list=[8, 16, 24, 32, 48, 64], bridge=True, gt_ds=True):
+        super().__init__()
+
+        self.name = "egeunet"
+
+        self.bridge = bridge
+        self.gt_ds = gt_ds
+
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(input_channels, 8, 3, stride=1, padding=1),
+        )
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(8, 16, 3, stride=1, padding=1),
+        )
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(16, 24, 3, stride=1, padding=1),
+            ConvLayer(24),
+        )
+        self.encoder4 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(24, 32),
+        )
+        self.encoder5 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(32, 48),
+        )
+        self.encoder6 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(48, 64),
+        )
+
+        self.Down1 = Down(8)
+        self.Down2 = Down(16)
+        self.Down3 = Down(24)
+
+        self.merge1 = Merge(8)
+        self.merge2 = Merge(16)
+        self.merge3 = Merge(24)
+        self.merge4 = Merge(32)
+        self.merge5 = Merge(48)
+
+        self.pred1 = Image_Prediction_Generator(48)
+        self.pred2 = Image_Prediction_Generator(32)
+        self.pred3 = Image_Prediction_Generator(24)
+        self.pred4 = Image_Prediction_Generator(16)
+        self.pred5 = Image_Prediction_Generator(8)
+
+        # if bridge:
+        #     self.GAB1 = group_aggregation_bridge(16, 8)
+        #     self.GAB2 = group_aggregation_bridge(24, 16)
+        #     self.GAB3 = group_aggregation_bridge(32, 24)
+        #     self.GAB4 = group_aggregation_bridge(48, 32)
+        #     self.GAB5 = group_aggregation_bridge(64, 48)
+        #     print('group_aggregation_bridge was used')
+        # if gt_ds:
+        #     self.gt_conv1 = nn.Sequential(nn.Conv2d(48, 1, 1))
+        #     self.gt_conv2 = nn.Sequential(nn.Conv2d(32, 1, 1))
+        #     self.gt_conv3 = nn.Sequential(nn.Conv2d(24, 1, 1))
+        #     self.gt_conv4 = nn.Sequential(nn.Conv2d(16, 1, 1))
+        #     self.gt_conv5 = nn.Sequential(nn.Conv2d(8, 1, 1))
+        #     print('gt deep supervision was used')
+
+        self.decoder1 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(64, 48),
+        )
+        self.decoder2 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(48, 32),
+        )
+        self.decoder3 = nn.Sequential(
+            Grouped_multi_axis_Hadamard_Product_Attention(32, 24),
+        )
+        self.decoder4 = nn.Sequential(
+            nn.Conv2d(24, 16, 3, stride=1, padding=1),
+        )
+        self.decoder5 = nn.Sequential(
+            nn.Conv2d(16, 8, 3, stride=1, padding=1),
+        )
+        self.ebn1 = nn.GroupNorm(4, 8)
+        self.ebn2 = nn.GroupNorm(4, 16)
+        self.ebn3 = nn.GroupNorm(4, 24)
+        self.ebn4 = nn.GroupNorm(4, 32)
+        self.ebn5 = nn.GroupNorm(4, 48)
+        self.dbn1 = nn.GroupNorm(4, 48)
+        self.dbn2 = nn.GroupNorm(4, 32)
+        self.dbn3 = nn.GroupNorm(4, 24)
+        self.dbn4 = nn.GroupNorm(4, 16)
+        self.dbn5 = nn.GroupNorm(4, 8)
+
+        self.final = nn.Conv2d(8, num_classes, kernel_size=1)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Conv1d):
+            n = m.kernel_size[0] * m.out_channels
+            m.weight.data.normal_(0, math.sqrt(2. / n))
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, x):
+
+        out = self.encoder1(x)
+        out = F.gelu(self.Down1(self.ebn1(out)))
+        t1 = out  # b, 8, 128, 128
+
+        out = self.encoder2(out)
+        out = F.gelu(self.Down2(self.ebn2(out)))
+        t2 = out  # b, 16, 64, 64
+
+        out = self.encoder3(out)
+        out = F.gelu(self.Down3(self.ebn3(out)))
+        t3 = out  # b, 24, 32, 32
+
+        out = self.encoder4(out)
+        out = F.gelu(F.max_pool2d(self.ebn4(out), 2))
+        t4 = out  # b, 32, 16, 16
+
+        out = self.encoder5(out)
+        out = F.gelu(F.max_pool2d(self.ebn5(out), 2))
+        t5 = out  # b, 48, 8, 8
+
+        out = self.encoder6(out)
+        out = F.gelu(out)  # b, 64, 8, 8
+
+        out = self.decoder1(out)
+        out = F.gelu(self.dbn1(out))  # b, 48, 8, 8
+
+        out, gt_pre5 = self.pred1(out)
+        out = self.merge5(out, t5, gt_pre5, 0.1)  # b, 48, 8, 8
+        gt_pre5 = F.interpolate(gt_pre5, scale_factor=32, mode='bilinear', align_corners=True)
+
+        out = self.decoder2(out)
+        out = F.gelu(
+            F.interpolate(self.dbn2(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 32, 16, 16
+        out, gt_pre4 = self.pred2(out)
+        out = self.merge4(out, t4, gt_pre4, 0.2)  # b, 32, 16, 16
+        gt_pre4 = F.interpolate(gt_pre4, scale_factor=16, mode='bilinear', align_corners=True)
+
+        out = self.decoder3(out)
+
+        out = F.gelu(
+            F.interpolate(self.dbn3(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 24, 32, 32
+        out, gt_pre3 = self.pred3(out)
+        out = self.merge3(out, t3, gt_pre3, 0.3)  # b, 24, 32, 32
+        gt_pre3 = F.interpolate(gt_pre3, scale_factor=8, mode='bilinear', align_corners=True)
+
+        out = self.decoder4(out)
+        out = F.gelu(
+            F.interpolate(self.dbn4(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 16, 64, 64
+        out, gt_pre2 = self.pred4(out)
+        out = self.merge2(out, t2, gt_pre2, 0.4)  # b, 16, 64, 64
+        gt_pre2 = F.interpolate(gt_pre2, scale_factor=4, mode='bilinear', align_corners=True)
+
+        out = self.decoder5(out)
+        out = F.gelu(
+            F.interpolate(self.dbn5(out), scale_factor=(2, 2), mode='bilinear', align_corners=True))  # b, 8, 128, 128
+        out, gt_pre1 = self.pred5(out)
+        out = self.merge1(out, t1, gt_pre1, 0.5)  # b, 3, 128, 128
+        gt_pre1 = F.interpolate(gt_pre1, scale_factor=2, mode='bilinear', align_corners=True)
+
+        out = self.final(out)
+        out = F.interpolate(out, scale_factor=(2, 2), mode='bilinear', align_corners=True)  # b, num_class, H, W
+
+        if self.gt_ds:
+            return (torch.sigmoid(gt_pre5), torch.sigmoid(gt_pre4), torch.sigmoid(gt_pre3), torch.sigmoid(gt_pre2),
+                    torch.sigmoid(gt_pre1)), torch.sigmoid(out)
+        else:
+            return torch.sigmoid(out)
