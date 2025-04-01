@@ -5,6 +5,80 @@ from torchsummary import summary
 from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
 
 
+class EdgeGuidedUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels, upscale_factor=2):
+        super(EdgeGuidedUpsample, self).__init__()
+
+        # 参数
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.upscale_factor = upscale_factor
+
+        # 边缘提取模块 (使用简单的 3x3 卷积模拟边缘检测)
+        self.edge_conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=1,  # 单通道边缘图
+            kernel_size=3,
+            padding=1,
+            bias=False
+        )
+        # 初始化为类似 Sobel 的边缘检测核
+        with torch.no_grad():
+            self.edge_conv.weight.data = torch.tensor([
+                [-1, 0, 1],
+                [-2, 0, 2],
+                [-1, 0, 1]
+            ], dtype=torch.float32).view(1, 1, 3, 3).repeat(1, in_channels, 1, 1)
+
+        # 上采样模块 (使用转置卷积)
+        self.upconv = nn.ConvTranspose2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=4,
+            stride=upscale_factor,
+            padding=1,
+            output_padding=0
+        )
+
+        # 边缘引导融合层 (将边缘图与上采样结果融合)
+        self.fusion_conv = nn.Conv2d(
+            in_channels=out_channels + 1,  # 上采样结果 + 边缘图
+            out_channels=out_channels,
+            kernel_size=3,
+            padding=1
+        )
+
+        # 激活函数
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # 输入 x 的形状: [batch_size, in_channels, H, W]
+
+        # 1. 提取边缘特征
+        edge_map = self.edge_conv(x)  # [batch_size, 1, H, W]
+        edge_map = torch.abs(edge_map)  # 取绝对值，确保边缘信息为正
+        edge_map = self.relu(edge_map)
+
+        # 2. 上采样输入图像
+        upsampled = self.upconv(x)  # [batch_size, out_channels, H*upscale_factor, W*upscale_factor]
+        upsampled = self.relu(upsampled)
+
+        # 3. 上采样边缘图到相同尺寸
+        edge_map_up = F.interpolate(
+            edge_map,
+            scale_factor=self.upscale_factor,
+            mode='bilinear',
+            align_corners=False
+        )  # [batch_size, 1, H*upscale_factor, W*upscale_factor]
+
+        # 4. 融合边缘图和上采样结果
+        combined = torch.cat([upsampled, edge_map_up], dim=1)  # [batch_size, out_channels+1, H', W']
+        output = self.fusion_conv(combined)  # [batch_size, out_channels, H', W']
+        output = self.relu(output)
+
+        return output
+
+
 class ShiftedChannel(nn.Module):
     def __init__(self, shift_ratio=0.25):
         super(ShiftedChannel, self).__init__()
@@ -129,7 +203,7 @@ class HighFourierTransform(nn.Module):
         return img_back_h
 
 
-class Image_Prediction_Generator(nn.Module):
+class Prediction_Guided_Refinement(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.in_channels = in_channels
@@ -163,82 +237,6 @@ class LayerNorm(nn.Module):
             return x
 
 
-class Merge(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x1, x2, gt_pre, w):
-        x = x1 + x2 + torch.sigmoid(gt_pre) * x2 * w
-        return x
-
-
-class Grouped_multi_axis_Hadamard_Product_Attention(nn.Module):
-    def __init__(self, dim_in, dim_out, x=8, y=8):
-        super().__init__()
-
-        c_dim_in = dim_in // 4
-        k_size = 3
-        pad = (k_size - 1) // 2
-
-        self.params_xy = nn.Parameter(torch.Tensor(1, c_dim_in, x, y), requires_grad=True)
-        nn.init.ones_(self.params_xy)
-        self.conv_xy = nn.Sequential(nn.Conv2d(c_dim_in, c_dim_in, kernel_size=k_size, padding=pad, groups=c_dim_in),
-                                     nn.GELU(), nn.Conv2d(c_dim_in, c_dim_in, 1))
-
-        self.params_zx = nn.Parameter(torch.Tensor(1, 1, c_dim_in, x), requires_grad=True)
-        nn.init.ones_(self.params_zx)
-        self.conv_zx = nn.Sequential(nn.Conv1d(c_dim_in, c_dim_in, kernel_size=k_size, padding=pad, groups=c_dim_in),
-                                     nn.GELU(), nn.Conv1d(c_dim_in, c_dim_in, 1))
-
-        self.params_zy = nn.Parameter(torch.Tensor(1, 1, c_dim_in, y), requires_grad=True)
-        nn.init.ones_(self.params_zy)
-        self.conv_zy = nn.Sequential(nn.Conv1d(c_dim_in, c_dim_in, kernel_size=k_size, padding=pad, groups=c_dim_in),
-                                     nn.GELU(), nn.Conv1d(c_dim_in, c_dim_in, 1))
-
-        self.dw = nn.Sequential(
-            nn.Conv2d(c_dim_in, c_dim_in, 1),
-            nn.GELU(),
-            nn.Conv2d(c_dim_in, c_dim_in, kernel_size=3, padding=1, groups=c_dim_in)
-        )
-
-        self.norm1 = LayerNorm(dim_in, eps=1e-6, data_format='channels_first')
-        self.norm2 = LayerNorm(dim_in, eps=1e-6, data_format='channels_first')
-
-        self.ldw = nn.Sequential(
-            nn.Conv2d(dim_in, dim_in, kernel_size=3, padding=1, groups=dim_in),
-            nn.GELU(),
-            nn.Conv2d(dim_in, dim_out, 1),
-        )
-
-    def forward(self, x):
-        x = self.norm1(x)
-        x1, x2, x3, x4 = torch.chunk(x, 4, dim=1)
-        B, C, H, W = x1.size()
-        # ----------xy----------#
-        params_xy = self.params_xy
-        x1 = x1 * self.conv_xy(F.interpolate(params_xy, size=x1.shape[2:4], mode='bilinear', align_corners=True))
-        # ----------zx----------#
-        x2 = x2.permute(0, 3, 1, 2)
-        params_zx = self.params_zx
-        x2 = x2 * self.conv_zx(
-            F.interpolate(params_zx, size=x2.shape[2:4], mode='bilinear', align_corners=True).squeeze(0)).unsqueeze(0)
-        x2 = x2.permute(0, 2, 3, 1)
-        # ----------zy----------#
-        x3 = x3.permute(0, 2, 1, 3)
-        params_zy = self.params_zy
-        x3 = x3 * self.conv_zy(
-            F.interpolate(params_zy, size=x3.shape[2:4], mode='bilinear', align_corners=True).squeeze(0)).unsqueeze(0)
-        x3 = x3.permute(0, 2, 1, 3)
-        # ----------dw----------#
-        x4 = self.dw(x4)
-        # ----------concat----------#
-        x = torch.cat([x1, x2, x3, x4], dim=1)
-        # ----------ldw----------#
-        x = self.norm2(x)
-        x = self.ldw(x)
-        return x
-
-
 class EELUnet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(EELUnet, self).__init__()
@@ -250,78 +248,120 @@ class EELUnet(nn.Module):
 
         self.enc1 = nn.Sequential(
             self.conv_block(in_channels, 64),
+            # self.mlp_conv_block(in_channels, 64),
         )
         self.enc2 = nn.Sequential(
             self.conv_block(64, 128),
+            # self.mlp_conv_block(64, 128),
         )
         self.enc3 = nn.Sequential(
-            self.conv_block(128, 256),
+            # self.conv_block(128, 256),
+            self.mlp_conv_block(128, 256),
         )
         self.enc4 = nn.Sequential(
-            self.conv_block(256, 512),
+            # self.conv_block(256, 512),
+            self.mlp_conv_block(256, 512),
         )
 
         # 瓶颈层
-        self.bottleneck = self.mlp_conv_block(512, 1024)
+        self.bottleneck = nn.Sequential(
+                nn.BatchNorm2d(512),
+                nn.Conv2d(512, 1024, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                TokenizedMLPBlock(1024, 1024),
+                nn.ReLU(inplace=True),
+            )
+        # self.bottleneck = self.conv_block(512, 1024)
 
         # 解码器部分
-        self.upconv4 = self.upconv_block(1024, 512)
+        # self.upconv4 = self.upconv_block(1024, 512)
+        self.upconv4 = self.mlp_upconv_block(1024, 512)
+        # self.dec4 = Grouped_multi_axis_Hadamard_Product_Attention(512, 512)
+        # self.dec4 = self.conv_block(1024, 512)
+        self.dec4 = self.mlp_conv_block(1024, 512)
 
-        self.dec4 = Grouped_multi_axis_Hadamard_Product_Attention(1024, 512)
-
-        self.upconv3 = self.upconv_block(512, 256)
-
-        self.dec3 = Grouped_multi_axis_Hadamard_Product_Attention(512, 256)
+        # self.upconv3 = self.upconv_block(512, 256)
+        self.upconv3 = self.mlp_upconv_block(512, 256)
+        # self.dec3 = Grouped_multi_axis_Hadamard_Product_Attention(256, 256)
+        # self.dec3 = self.conv_block(512, 256)
+        self.dec3 = self.mlp_conv_block(512, 256)
 
         self.upconv2 = self.upconv_block(256, 128)
         self.dec2 = self.conv_block(256, 128)
+        # self.upconv2 = self.mlp_upconv_block(256, 128)
+        # self.dec2 = self.mlp_conv_block(256, 128)
+
+
         self.upconv1 = self.upconv_block(128, 64)
         self.dec1 = self.conv_block(128, 64)
+        # self.upconv1 = self.mlp_upconv_block(128, 64)
+        # self.dec1 = self.mlp_conv_block(128, 64)
 
 
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
-        self.pred5 = Image_Prediction_Generator(1024)
-        self.pred4 = Image_Prediction_Generator(512)
-        self.pred3 = Image_Prediction_Generator(256)
-        self.pred2 = Image_Prediction_Generator(128)
-        self.pred1 = Image_Prediction_Generator(64)
+        self.pred5 = Prediction_Guided_Refinement(1024)
+        self.pred4 = Prediction_Guided_Refinement(512)
+        self.pred3 = Prediction_Guided_Refinement(256)
+        self.pred2 = Prediction_Guided_Refinement(128)
+        self.pred1 = Prediction_Guided_Refinement(64)
 
-        self.edge_upconv_4 = nn.Sequential(self.upconv_block(1024, 512),
-                                           Grouped_multi_axis_Hadamard_Product_Attention(512, 512),
-                                           )
-        self.edge_upconv_3 = nn.Sequential(self.upconv_block(512, 256),
-                                           Grouped_multi_axis_Hadamard_Product_Attention(256, 256)
-                                           )
+        self.edge_upconv_4 = nn.Sequential(
+            # self.upconv_block(1024, 512),
+            self.mlp_upconv_block(1024, 512),
+            # Grouped_multi_axis_Hadamard_Product_Attention(1024, 512),
+            # self.conv_block(512, 512),
+            self.mlp_conv_block(512, 512)
+        )
+        self.edge_upconv_3 = nn.Sequential(
+            # self.upconv_block(512, 256),
+            self.mlp_upconv_block(512, 256),
+            # Grouped_multi_axis_Hadamard_Product_Attention(512, 256)
+            # self.conv_block(256, 256),
+            self.mlp_conv_block(256, 256),
+        )
 
-        self.edge_upconv_2 = nn.Sequential(self.upconv_block(256, 128),
-                                           HighFourierTransform(),
-                                           self.conv_block(128, 128))
-        self.edge_upconv_1 = nn.Sequential(self.upconv_block(128, 64),
-                                           HighFourierTransform(),
-                                           self.conv_block(64, 64))
+        self.edge_upconv_2 = nn.Sequential(
+            self.upconv_block(256, 128),
+            # self.mlp_upconv_block(256, 128),
+            HighFourierTransform(),
+            self.conv_block(128, 128),
+            # self.mlp_conv_block(128, 128),
+        )
+        self.edge_upconv_1 = nn.Sequential(
+            self.upconv_block(128, 64),
+            # self.mlp_upconv_block(128, 64),
+            HighFourierTransform(),
+            self.conv_block(64, 64),
+            # self.mlp_conv_block(64, 64)
+        )
 
         self.final = nn.Sequential(
-            LayerNorm(normalized_shape=128, data_format='channels_first'),
-            nn.Conv2d(128, out_channels, 1)
+            LayerNorm(normalized_shape=64, data_format='channels_first'),
+            nn.Conv2d(64, out_channels, 1)
         )
 
     def conv_block(self, in_channels, out_channels):
         # 定义卷积块，包括两个卷积层、ReLU激活函数
         return nn.Sequential(
-            nn.BatchNorm2d(in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            # Grouped_multi_axis_Hadamard_Product_Attention(out_channels, out_channels),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         )
 
     def mlp_conv_block(self, in_channels, out_channels):
         # 定义卷积块，包括两个卷积层、ReLU激活函数
         return nn.Sequential(
+
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             TokenizedMLPBlock(out_channels, out_channels),
+            # Grouped_multi_axis_Hadamard_Product_Attention(out_channels, out_channels),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             # nn.Dropout(p=0.2)  # 添加Dropout层
         )
@@ -330,6 +370,14 @@ class EELUnet(nn.Module):
         # 定义上采样块，使用反卷积层
         return nn.Sequential(
             nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.BatchNorm2d(out_channels),
+        )
+
+    def mlp_upconv_block(self, in_channels, out_channels):
+        # 定义上采样块，使用反卷积层
+        return nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            TokenizedMLPBlock(out_channels, out_channels),
             nn.BatchNorm2d(out_channels),
         )
 
@@ -366,6 +414,7 @@ class EELUnet(nn.Module):
         dec4 = self.upconv4(bottleneck)
         dec4 = torch.add(dec4, edge_dec4)
         enc4_crop = self.center_crop(enc4, dec4.size())
+        # dec4 = torch.concat((dec4, enc4_crop), dim=1)
         dec4 = interleave_tensors(dec4, enc4_crop, dim=1)
         dec4 = self.dec4(dec4)
 
@@ -373,6 +422,7 @@ class EELUnet(nn.Module):
         dec3 = self.upconv3(dec3)
         dec3 = torch.add(dec3, edge_dec3)
         enc3_crop = self.center_crop(enc3, dec3.size())
+        # dec3 = torch.concat((dec3, enc3_crop), dim=1)
         dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
         dec3 = self.dec3(dec3)
 
@@ -380,6 +430,7 @@ class EELUnet(nn.Module):
         dec2 = self.upconv2(dec2)
         dec2 = torch.add(dec2, edge_dec2)
         enc2_crop = self.center_crop(enc2, dec2.size())
+        # dec2 = torch.concat((dec2, enc2_crop), dim=1)
         dec2 = interleave_tensors(dec2, enc2_crop, dim=1)
         dec2 = self.dec2(dec2)
 
@@ -387,13 +438,11 @@ class EELUnet(nn.Module):
         dec1 = self.upconv1(dec1)
         dec1 = torch.add(dec1, edge_dec1)
         enc1_crop = self.center_crop(enc1, dec1.size())
+        # dec1 = torch.concat((dec1, enc1_crop), dim=1)
         dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
         dec1 = self.dec1(dec1)
 
         seg_out, edge_1 = self.pred1(dec1)
-
-
-        seg_out = interleave_tensors(seg_out, edge_dec1, dim=1)
 
         seg_out = self.final(seg_out)
 

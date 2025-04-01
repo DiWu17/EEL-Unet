@@ -88,9 +88,10 @@ class GT_BceDiceLoss(nn.Module):
                   self.bcedice(gt_pre1, target) * 0.5
         return bcediceloss + gt_loss
 
-class edge_bacediceloss(nn.Module):
+
+class edge_BceDiceLoss(nn.Module):
     def __init__(self, wb=1, wd=1):
-        super(edge_bacediceloss, self).__init__()
+        super(edge_BceDiceLoss, self).__init__()
         self.bcedice = BceDiceLoss(wb, wd)
 
     def forward(self, gt_pre, out, target):
@@ -111,20 +112,14 @@ class edge_bacediceloss(nn.Module):
                   self.bcedice(gt_pre1, target_1) * 0.5
         return bcediceloss + gt_loss
 
-class edge_canny_bacediceloss(nn.Module):
-    def __init__(self, wb=1, wd=1):
-        super(edge_canny_bacediceloss, self).__init__()
-        self.bcedice = BceDiceLoss(wb, wd)
-        self.boundaryloss = BoundaryLoss()
+class edge_Diceloss(nn.Module):
+    def __init__(self):
+        super(edge_Diceloss, self).__init__()
+        self.dice = DiceLoss()
 
     def forward(self, gt_pre, out, target):
-        bcediceloss = self.bcedice(out, target)
+        diceloss = self.dice(out, target)
         gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
-
-        # target = canny_edge_torch(target)
-
-        # visualize_images(target.cpu(), "target")
-        # visualize_images(gt_pre1.cpu(), "gt_pre1")
 
         target_5 = F.max_pool2d(target, kernel_size=16, stride=16)
         target_4 = F.max_pool2d(target, kernel_size=8, stride=8)
@@ -132,56 +127,36 @@ class edge_canny_bacediceloss(nn.Module):
         target_2 = F.max_pool2d(target, kernel_size=2, stride=2)
         target_1 = target
 
-        # visualize_images(target_1.cpu(), "target_1")
+        gt_loss = self.dice(gt_pre5, target_5) * 0.1 + \
+                  self.dice(gt_pre4, target_4) * 0.2 + \
+                  self.dice(gt_pre3, target_3) * 0.3 + \
+                  self.dice(gt_pre2, target_2) * 0.4 + \
+                  self.dice(gt_pre1, target_1) * 0.5
+        return diceloss + gt_loss
 
-        gt_loss = self.bcedice(gt_pre5, target_5) * 0.1 + \
-                  self.bcedice(gt_pre4, target_4) * 0.2 + \
-                  self.bcedice(gt_pre3, target_3) * 0.3 + \
-                  self.bcedice(gt_pre2, target_2) * 0.4 + \
-                  self.bcedice(gt_pre1, target_1) * 0.5
-        # print(gt_loss)
-        # print(bcediceloss)
-        return bcediceloss + gt_loss
-
-
-
-
-class BoundaryLoss(nn.Module):
+class edge_BceLoss(nn.Module):
     def __init__(self):
-        """
-        Boundary Loss：基于真实边界距离地图对预测概率进行加权，
-        越远离真实边界的像素如果被预测为正（前景）会产生更高的损失，从而鼓励
-        模型在边界附近的预测更精确。
-        """
-        super(BoundaryLoss, self).__init__()
-        self.sigmoid = nn.Sigmoid()
+        super(edge_BceLoss, self).__init__()
+        self.bce = BCELoss()
 
-    def forward(self, logits, target):
-        """
-        :param logits: 模型输出 logits，尺寸为 [B, 1, H, W]
-        :param target: 真实二值 mask，尺寸为 [B, 1, H, W]，值为0或1
-        :return: Boundary Loss（标量）
-        """
-        # 首先对 logits 进行 Sigmoid 激活得到预测概率
-        pred = self.sigmoid(logits)  # 结果范围 [0, 1]
-        loss = 0.0
-        batch_size = pred.size(0)
-        # 遍历每个样本
-        for i in range(batch_size):
-            # 将第 i 个样本的真实 mask 转换为 numpy 数组，形状 (H, W)
-            target_np = target[i, 0].cpu().numpy().astype(np.uint8)
-            # 计算距离地图，尺寸 (H, W)
-            d_map = compute_distance_map(target_np)
-            # 转换为 torch.Tensor，并移到与预测相同的设备
-            d_map = torch.from_numpy(d_map).float().to(pred.device)
-            # 归一化距离地图，防止数值过大
-            d_map = d_map / (d_map.max() + 1e-7)
-            # 计算当前样本的损失：
-            # 将预测概率与距离地图点乘，然后除以距离地图的和，避免数值过大
-            sample_loss = (pred[i, 0] * d_map).sum() / (d_map.sum() + 1e-7)
-            loss += sample_loss
-        # 返回 batch 中所有样本的平均损失
-        return loss / batch_size
+    def forward(self, gt_pre, out, target):
+        diceloss = self.bce(out, target)
+        gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
+
+        target_5 = F.max_pool2d(target, kernel_size=16, stride=16)
+        target_4 = F.max_pool2d(target, kernel_size=8, stride=8)
+        target_3 = F.max_pool2d(target, kernel_size=4, stride=4)
+        target_2 = F.max_pool2d(target, kernel_size=2, stride=2)
+        target_1 = target
+
+        gt_loss = self.bce(gt_pre5, target_5) * 0.1 + \
+                  self.bce(gt_pre4, target_4) * 0.2 + \
+                  self.bce(gt_pre3, target_3) * 0.3 + \
+                  self.bce(gt_pre2, target_2) * 0.4 + \
+                  self.bce(gt_pre1, target_1) * 0.5
+        return diceloss + gt_loss
+
+
 
 # -----------------------------
 # 定义 Dice Loss（用于语义分割）

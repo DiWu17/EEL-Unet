@@ -14,6 +14,8 @@ from models.Unet import Unet
 from models.EELUnet import EELUnet
 from models.UnetPlusPlus import UnetPlusPlus
 from models.egeunet import EGEUNet
+from models.malunet import MALUNet
+from models.unext import UNext, UNext_S
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -30,10 +32,11 @@ def save_mask(tensor, save_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test segmentation model and save predicted masks")
-    parser.add_argument("--model_type", type=str, default="unet", choices=["unet", "unet++", "eelunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="eelunet",
+                        choices=["unet", "eelunet", "egeunet", "unext", "unext_s", "malunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data", help="数据集目录")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/EELUnet/checkpoints/unet/unet_best_miou.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/EELUnet/checkpoints/eelunet_7385.pth", help="模型权重文件路径")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
     parser.add_argument("--save_dir", type=str, default="results", help="保存预测结果的根目录")
     args = parser.parse_args()
@@ -63,7 +66,14 @@ if __name__ == '__main__':
                         input_channels=3,
                         c_list=[8, 16, 24, 32, 48, 64],
                         bridge=True,
-                        gt_ds=True)
+                        gt_ds=True,
+                        )
+    elif args.model_type == "unext":
+        model = UNext(num_classes=1, in_channels=3)
+    elif args.model_type == "unext_s":
+        model = UNext_S(num_classes=1, in_channels=3)
+    elif args.model_type == "malunet":
+        model = MALUNet(num_classes=1, input_channels=3)
     else:
         raise ValueError("Unsupported model type")
     model.to(device)
@@ -104,8 +114,8 @@ if __name__ == '__main__':
                 outputs = model(inputs)
 
             # 将 logits 转换为概率并二值化
-            probs = sigmoid(outputs)  # [B, C, H, W]
-            preds = (probs > 0.5).float()  # [B, C, H, W]
+            # probs = sigmoid(outputs)  # [B, C, H, W]
+            preds = (outputs > 0.5).float()  # [B, C, H, W]
 
             batch_size = preds.size(0)  # 获取当前 batch 的实际大小
             for i in range(batch_size):

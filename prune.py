@@ -92,7 +92,7 @@ def train(model, train_loader, val_loader, test_loader, criterion, optimizer, de
         # 验证
         epoch_val_loss = val_one_epoch(model, val_loader, criterion, device)
 
-        pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1 = evaluate(model, test_loader, device)
+        pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1, mdice = evaluate(model, test_loader, device)
 
         # Log the metrics to TensorBoard
         writer.add_scalar('Metrics/Pixel Accuracy', pixel_accuracy, epoch + 1)

@@ -15,6 +15,9 @@ from models.Unet import Unet
 from models.EELUnet import EELUnet
 from models.UnetPlusPlus import UnetPlusPlus
 from models.egeunet import EGEUNet
+from models.malunet import MALUNet
+from models.unext import UNext, UNext_S
+
 
 # 导入数据集
 from data.ToothDataset import ToothDataset
@@ -59,12 +62,12 @@ def boundary_f1_score(gt, pred, dilation_ratio=0.02):
 def evaluate(model, dataloader, device):
     """
     计算模型在测试集上的各项指标：
-    像素准确率、精确率、召回率、F1 Score、IoU、Dice、平均 IoU 以及 Boundary F1 Score。
+    像素准确率、精确率、召回率、F1 Score、IoU、Dice、平均 IoU、Boundary F1 Score 以及 mDice。
     """
     model.eval()
 
-    TP = 0  # 真阳性
-    TN = 0  # 真阴性
+    TP = 0  # 真阳性 (foreground)
+    TN = 0  # 真阴性 (background)
     FP = 0  # 假阳性
     FN = 0  # 假阴性
 
@@ -111,25 +114,25 @@ def evaluate(model, dataloader, device):
     recall = TP / (TP + FN + epsilon)
     f1_score = 2 * precision * recall / (precision + recall + epsilon)
     iou = TP / (TP + FP + FN + epsilon)
-    dice = 2 * TP / (2 * TP + FP + FN + epsilon)
-    # 简单计算背景 IoU
+    dice_fg = 2 * TP / (2 * TP + FP + FN + epsilon)  # 前景 Dice
+    dice_bg = 2 * TN / (2 * TN + FP + FN + epsilon)  # 背景 Dice
+    mdice = (dice_fg + dice_bg) / 2  # 平均 Dice (mDice)
     iou_bg = TN / (TN + FP + FN + epsilon)
     miou = (iou + iou_bg) / 2
     avg_boundary_f1 = boundary_f1_total / (sample_count + epsilon)
 
-    return pixel_accuracy, precision, recall, f1_score, iou, dice, miou, avg_boundary_f1
-
-
+    return pixel_accuracy, precision, recall, f1_score, iou, dice_fg, miou, avg_boundary_f1, mdice
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate segmentation model and output metrics")
-    parser.add_argument("--model_type", type=str, default="eelunet", choices=["unet", "unet++", "eelunet", "egeunet"],
+    parser.add_argument("--model_type", type=str, default="eelunet",
+                        choices=["unet", "eelunet", "egeunet", "unext", "unext_s", "malunet"],
                         help="选择模型类型")
     parser.add_argument("--data_dir", type=str, default="F:/Datasets/tooth/tooth_seg_new_split_data",
                         help="数据集目录")
     parser.add_argument("--split", type=str, default="test", help="test")
     parser.add_argument("--batch_size", type=int, default=8, help="测试时的批大小")
-    parser.add_argument("--checkpoint", type=str, default="D:/python/EELUnet/checkpoints/eelunet/eelunet_best_iou.pth", help="模型权重文件路径")
+    parser.add_argument("--checkpoint", type=str, default="D:/python/EELUnet/checkpoints/eelunet_7385.pth", help="模型权重文件路径")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,6 +159,12 @@ if __name__ == '__main__':
                         bridge=True,
                         gt_ds=True,
                         )
+    elif args.model_type == "unext":
+        model = UNext(num_classes=1, in_channels=3)
+    elif args.model_type == "unext_s":
+        model = UNext_S(num_classes=1, in_channels=3)
+    elif args.model_type == "malunet":
+        model = MALUNet(num_classes=1, input_channels=3)
     else:
         raise ValueError("Unsupported model type")
     model.to(device)
@@ -180,7 +189,7 @@ if __name__ == '__main__':
     current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
     print(f"Evaluation date: {current_date}")
     print(f"Model: {model_name}, Epoch: {epoch_str}")
-    pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1 = evaluate(model, test_loader, device)
+    pixel_accuracy, precision, recall, f1_score, iou, dice, miou, boundary_f1, mdice = evaluate(model, test_loader, device)
 
     print("Evaluation Metrics:")
     print(f"Pixel Accuracy: {pixel_accuracy:.4f}")
@@ -188,7 +197,7 @@ if __name__ == '__main__':
     print(f"Recall: {recall:.4f}")
     print(f"F1 Score: {f1_score:.4f}")
     print(f"IoU (foreground): {iou:.4f}")
-    print(f"Dice Coefficient: {dice:.4f}")
+    print(f"Dice Coefficient (foreground): {dice:.4f}")
     print(f"Mean IoU: {miou:.4f}")
     print(f"Boundary F1 Score: {boundary_f1:.4f}")
-
+    print(f"mDice: {mdice:.4f}")
