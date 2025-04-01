@@ -5,78 +5,80 @@ from torchsummary import summary
 from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
 
 
-class EdgeGuidedUpsample(nn.Module):
-    def __init__(self, in_channels, out_channels, upscale_factor=2):
-        super(EdgeGuidedUpsample, self).__init__()
 
-        # 参数
+class ChannelAttention(nn.Module):
+    """
+    通道注意力模块
+    通过全局池化压缩空间信息，然后用全连接层学习通道间的关系
+    """
+
+    def __init__(self, in_channels, reduction=16):
+        """
+        参数：
+            in_channels (int): 输入特征的通道数
+            reduction (int): 降维比例，用于减少参数量，默认16
+        """
+        super(ChannelAttention, self).__init__()
+
         self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.upscale_factor = upscale_factor
+        self.reduction = reduction
 
-        # 边缘提取模块 (使用简单的 3x3 卷积模拟边缘检测)
-        self.edge_conv = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=1,  # 单通道边缘图
-            kernel_size=3,
-            padding=1,
-            bias=False
-        )
-        # 初始化为类似 Sobel 的边缘检测核
-        with torch.no_grad():
-            self.edge_conv.weight.data = torch.tensor([
-                [-1, 0, 1],
-                [-2, 0, 2],
-                [-1, 0, 1]
-            ], dtype=torch.float32).view(1, 1, 3, 3).repeat(1, in_channels, 1, 1)
+        # 全局平均池化，将空间维度压缩为1x1
+        self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
 
-        # 上采样模块 (使用转置卷积)
-        self.upconv = nn.ConvTranspose2d(
+        # 降维全连接层
+        self.fc1 = nn.Conv2d(
             in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=4,
-            stride=upscale_factor,
-            padding=1,
-            output_padding=0
+            out_channels=in_channels // reduction,
+            kernel_size=1,
+            bias=True
         )
 
-        # 边缘引导融合层 (将边缘图与上采样结果融合)
-        self.fusion_conv = nn.Conv2d(
-            in_channels=out_channels + 1,  # 上采样结果 + 边缘图
-            out_channels=out_channels,
-            kernel_size=3,
-            padding=1
+        # 升维全连接层，恢复到原始通道数
+        self.fc2 = nn.Conv2d(
+            in_channels=in_channels // reduction,
+            out_channels=in_channels,
+            kernel_size=1,
+            bias=True
         )
 
         # 激活函数
         self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # 输入 x 的形状: [batch_size, in_channels, H, W]
+        """
+        前向传播
+        参数：
+            x (torch.Tensor): 输入张量，形状为 [batch_size, in_channels, height, width]
+        返回：
+            torch.Tensor: 加权后的特征张量，形状与输入相同
+        """
+        # 输入形状：[batch_size, in_channels, height, width]
+        batch_size, channels, _, _ = x.size()
 
-        # 1. 提取边缘特征
-        edge_map = self.edge_conv(x)  # [batch_size, 1, H, W]
-        edge_map = torch.abs(edge_map)  # 取绝对值，确保边缘信息为正
-        edge_map = self.relu(edge_map)
+        # 1. 全局平均池化，压缩空间维度
+        # 输出形状：[batch_size, in_channels, 1, 1]
+        avg_out = self.global_avg_pool(x)
 
-        # 2. 上采样输入图像
-        upsampled = self.upconv(x)  # [batch_size, out_channels, H*upscale_factor, W*upscale_factor]
-        upsampled = self.relu(upsampled)
+        # 2. 第一个全连接层降维
+        # 输出形状：[batch_size, in_channels//reduction, 1, 1]
+        fc1_out = self.fc1(avg_out)
+        fc1_out = self.relu(fc1_out)
 
-        # 3. 上采样边缘图到相同尺寸
-        edge_map_up = F.interpolate(
-            edge_map,
-            scale_factor=self.upscale_factor,
-            mode='bilinear',
-            align_corners=False
-        )  # [batch_size, 1, H*upscale_factor, W*upscale_factor]
+        # 3. 第二个全连接层升维
+        # 输出形状：[batch_size, in_channels, 1, 1]
+        fc2_out = self.fc2(fc1_out)
 
-        # 4. 融合边缘图和上采样结果
-        combined = torch.cat([upsampled, edge_map_up], dim=1)  # [batch_size, out_channels+1, H', W']
-        output = self.fusion_conv(combined)  # [batch_size, out_channels, H', W']
-        output = self.relu(output)
+        # 4. Sigmoid激活，生成通道注意力权重
+        # 输出形状：[batch_size, in_channels, 1, 1]
+        attention_weights = self.sigmoid(fc2_out)
 
-        return output
+        # 5. 将注意力权重应用到原始输入上
+        # 通过广播机制，权重会自动扩展到与输入相同的空间维度
+        out = x * attention_weights
+
+        return out
 
 
 class ShiftedChannel(nn.Module):
@@ -102,6 +104,7 @@ class TokenizedMLPBlock(nn.Module):
         super(TokenizedMLPBlock, self).__init__()
         self.shift = ShiftedChannel()
         self.to_token = nn.Conv2d(in_channels, token_dim, kernel_size=1)
+        self.channel_attention = ChannelAttention(token_dim)
         self.mlp = nn.Sequential(
             nn.Linear(token_dim, token_dim * 4),
             nn.GELU(),
@@ -113,6 +116,7 @@ class TokenizedMLPBlock(nn.Module):
         B, C, H, W = x.shape
         x = self.shift(x)
         x = self.to_token(x)
+        x = self.channel_attention(x)
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, -1)
         x = self.mlp(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2)
@@ -401,6 +405,7 @@ class EELUnet(nn.Module):
         enc4 = self.enc4(enc4)
         bottleneck = nn.MaxPool2d(kernel_size=2)(enc4)
         bottleneck = self.bottleneck(bottleneck)
+        # print(bottleneck.shape)
 
         bottleneck, edge_5 = self.pred5(bottleneck)
 
