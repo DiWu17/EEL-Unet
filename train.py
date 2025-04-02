@@ -312,7 +312,7 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     # 学习率调度器
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.8)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
 
     # 训练.
     train(model, train_loader, val_loader, test_loader, criterion, optimizer, device,

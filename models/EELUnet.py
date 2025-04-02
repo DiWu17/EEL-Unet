@@ -5,7 +5,6 @@ from torchsummary import summary
 from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
 
 
-
 class ChannelAttention(nn.Module):
     """
     通道注意力模块
@@ -124,37 +123,24 @@ class TokenizedMLPBlock(nn.Module):
         return x
 
 
-def interleave_tensors(tensor1, tensor2, dim=0):
-    """
-    将两个张量按照指定维度交错拼接。
 
-    参数：
-        tensor1: 第一个输入张量
-        tensor2: 第二个输入张量
-        dim: 指定交错的维度，默认为0
+class ChannelInterleaveBridge(nn.Module):
+    def __init__(self, channels):
+        super(ChannelInterleaveBridge, self).__init__()
+        self.channels = channels
+        self.conv = nn.Conv2d(channels, channels, kernel_size=1)
 
-    返回：
-        交错拼接后的张量
+    def forward(self, x1, x2, dim=1):
+        # 获取张量的形状和指定维度的长度
+        shape = list(x1.shape)
+        # 将两个张量沿着指定维度堆叠
+        stacked = torch.stack([x1, x2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
 
-    要求：
-        tensor1 和 tensor2 的形状必须相同
-    """
-    # 检查输入张量的形状是否相同
-    if tensor1.shape != tensor2.shape:
-        raise ValueError("两个张量的形状必须相同")
-
-    # 获取张量的形状和指定维度的长度
-    shape = list(tensor1.shape)
-    dim_size = shape[dim]
-
-    # 将两个张量沿着指定维度堆叠
-    stacked = torch.stack([tensor1, tensor2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
-
-    # 重塑张量，使得交错的元素按顺序排列
-    new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
-    interleaved = stacked.reshape(new_shape)
-
-    return interleaved
+        # 重塑张量，使得交错的元素按顺序排列
+        new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
+        interleaved = stacked.reshape(new_shape)
+        # self.conv(interleaved)
+        return interleaved
 
 
 class HighFourierTransform(nn.Module):
@@ -207,7 +193,7 @@ class HighFourierTransform(nn.Module):
         return img_back_h
 
 
-class Prediction_Guided_Refinement(nn.Module):
+class PredictionGuidedRefinement(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.in_channels = in_channels
@@ -269,12 +255,12 @@ class EELUnet(nn.Module):
 
         # 瓶颈层
         self.bottleneck = nn.Sequential(
-                nn.BatchNorm2d(512),
-                nn.Conv2d(512, 1024, kernel_size=3, padding=1),
-                nn.ReLU(inplace=True),
-                TokenizedMLPBlock(1024, 1024),
-                nn.ReLU(inplace=True),
-            )
+            nn.BatchNorm2d(512),
+            nn.Conv2d(512, 1024, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            TokenizedMLPBlock(1024, 1024),
+            nn.ReLU(inplace=True),
+        )
         # self.bottleneck = self.conv_block(512, 1024)
 
         # 解码器部分
@@ -295,19 +281,23 @@ class EELUnet(nn.Module):
         # self.upconv2 = self.mlp_upconv_block(256, 128)
         # self.dec2 = self.mlp_conv_block(256, 128)
 
-
         self.upconv1 = self.upconv_block(128, 64)
         self.dec1 = self.conv_block(128, 64)
         # self.upconv1 = self.mlp_upconv_block(128, 64)
         # self.dec1 = self.mlp_conv_block(128, 64)
 
-
         # 辅助边缘分支：利用最后一个解码器特征生成1通道边缘预测图
-        self.pred5 = Prediction_Guided_Refinement(1024)
-        self.pred4 = Prediction_Guided_Refinement(512)
-        self.pred3 = Prediction_Guided_Refinement(256)
-        self.pred2 = Prediction_Guided_Refinement(128)
-        self.pred1 = Prediction_Guided_Refinement(64)
+        self.pred5 = PredictionGuidedRefinement(1024)
+        self.pred4 = PredictionGuidedRefinement(512)
+        self.pred3 = PredictionGuidedRefinement(256)
+        self.pred2 = PredictionGuidedRefinement(128)
+        self.pred1 = PredictionGuidedRefinement(64)
+
+        self.channel_interleave_bridge4 = ChannelInterleaveBridge(1024)
+        self.channel_interleave_bridge3 = ChannelInterleaveBridge(512)
+        self.channel_interleave_bridge2 = ChannelInterleaveBridge(256)
+        self.channel_interleave_bridge1 = ChannelInterleaveBridge(128)
+
 
         self.edge_upconv_4 = nn.Sequential(
             # self.upconv_block(1024, 512),
@@ -420,7 +410,8 @@ class EELUnet(nn.Module):
         dec4 = torch.add(dec4, edge_dec4)
         enc4_crop = self.center_crop(enc4, dec4.size())
         # dec4 = torch.concat((dec4, enc4_crop), dim=1)
-        dec4 = interleave_tensors(dec4, enc4_crop, dim=1)
+        # dec4 = interleave_tensors(dec4, enc4_crop, dim=1)
+        dec4 = self.channel_interleave_bridge4(dec4, enc4_crop, dim=1)
         dec4 = self.dec4(dec4)
 
         dec3, edge_4 = self.pred4(dec4)
@@ -428,7 +419,8 @@ class EELUnet(nn.Module):
         dec3 = torch.add(dec3, edge_dec3)
         enc3_crop = self.center_crop(enc3, dec3.size())
         # dec3 = torch.concat((dec3, enc3_crop), dim=1)
-        dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
+        # dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
+        dec3 = self.channel_interleave_bridge3(dec3, enc3_crop)
         dec3 = self.dec3(dec3)
 
         dec2, edge_3 = self.pred3(dec3)
@@ -436,7 +428,8 @@ class EELUnet(nn.Module):
         dec2 = torch.add(dec2, edge_dec2)
         enc2_crop = self.center_crop(enc2, dec2.size())
         # dec2 = torch.concat((dec2, enc2_crop), dim=1)
-        dec2 = interleave_tensors(dec2, enc2_crop, dim=1)
+        # dec2 = interleave_tensors(dec2, enc2_crop, dim=1)
+        dec2 = self.channel_interleave_bridge2(dec2, enc2_crop, dim=1)
         dec2 = self.dec2(dec2)
 
         dec1, edge_2 = self.pred2(dec2)
@@ -444,7 +437,8 @@ class EELUnet(nn.Module):
         dec1 = torch.add(dec1, edge_dec1)
         enc1_crop = self.center_crop(enc1, dec1.size())
         # dec1 = torch.concat((dec1, enc1_crop), dim=1)
-        dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
+        # dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
+        dec1 = self.channel_interleave_bridge1(dec1, enc1_crop, dim=1)
         dec1 = self.dec1(dec1)
 
         seg_out, edge_1 = self.pred1(dec1)
