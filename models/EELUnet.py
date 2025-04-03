@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary
-from utils.tools import canny_edge_torch, visualize_images, calculate_contribution
+from utils.tools import canny_edge_torch, visualize_images, calculate_contribution, visualize_feature_maps
 
 
 class ChannelAttention(nn.Module):
@@ -124,12 +124,11 @@ class PatchEmbeddingBlock(nn.Module):
 
 
 
-class ChannelInterleaveBridge(nn.Module):
+class FeatureInterleaveBridge(nn.Module):
     def __init__(self, channels):
-        super(ChannelInterleaveBridge, self).__init__()
+        super(FeatureInterleaveBridge, self).__init__()
         self.channels = channels
-        self.conv = nn.Conv2d(channels, channels, kernel_size=1)
-
+    #
     def forward(self, x1, x2, dim=1):
         # 获取张量的形状和指定维度的长度
         shape = list(x1.shape)
@@ -139,7 +138,6 @@ class ChannelInterleaveBridge(nn.Module):
         # 重塑张量，使得交错的元素按顺序排列
         new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
         interleaved = stacked.reshape(new_shape)
-        # self.conv(interleaved)
         return interleaved
 
 
@@ -293,10 +291,10 @@ class EELUnet(nn.Module):
         self.pred2 = PredictionGuidedRefinement(128)
         self.pred1 = PredictionGuidedRefinement(64)
 
-        self.channel_interleave_bridge4 = ChannelInterleaveBridge(1024)
-        self.channel_interleave_bridge3 = ChannelInterleaveBridge(512)
-        self.channel_interleave_bridge2 = ChannelInterleaveBridge(256)
-        self.channel_interleave_bridge1 = ChannelInterleaveBridge(128)
+        self.channel_interleave_bridge4 = FeatureInterleaveBridge(1024)
+        self.channel_interleave_bridge3 = FeatureInterleaveBridge(512)
+        self.channel_interleave_bridge2 = FeatureInterleaveBridge(256)
+        self.channel_interleave_bridge1 = FeatureInterleaveBridge(128)
 
 
         self.edge_upconv_4 = nn.Sequential(
@@ -387,17 +385,31 @@ class EELUnet(nn.Module):
         # 主分支
         # 编码器部分
         enc1 = self.enc1(x)
+
+        visualize_feature_maps(enc1, title="Encoder 1 Feature Maps", num_cols=8, save_path="encoder_1_feature_maps.png")
+
         enc2 = nn.MaxPool2d(kernel_size=2)(enc1)
         enc2 = self.enc2(enc2)
+
+        visualize_feature_maps(enc2, title="Encoder 2 Feature Maps", num_cols=8, save_path="encoder_2_feature_maps.png")
+
         enc3 = nn.MaxPool2d(kernel_size=2)(enc2)
         enc3 = self.enc3(enc3)
+
+        visualize_feature_maps(enc3, title="Encoder 3 Feature Maps", num_cols=8, save_path="encoder_3_feature_maps.png")
+
         enc4 = nn.MaxPool2d(kernel_size=2)(enc3)
         enc4 = self.enc4(enc4)
+
+        visualize_feature_maps(enc4, title="Encoder 4 Feature Maps", num_cols=8, save_path="encoder_4_feature_maps.png")
+
         bottleneck = nn.MaxPool2d(kernel_size=2)(enc4)
         bottleneck = self.bottleneck(bottleneck)
         # print(bottleneck.shape)
 
         bottleneck, edge_5 = self.pred5(bottleneck)
+
+        visualize_feature_maps(bottleneck, title="Bottleneck Feature Maps", num_cols=8, save_path="bottleneck_feature_maps.png")
 
         # 辅助分支
         edge_dec4 = self.edge_upconv_4(bottleneck)
@@ -414,6 +426,8 @@ class EELUnet(nn.Module):
         dec4 = self.channel_interleave_bridge4(dec4, enc4_crop, dim=1)
         dec4 = self.dec4(dec4)
 
+        visualize_feature_maps(dec4, title="Decoder 4 Feature Maps", num_cols=8, save_path="decoder_4_feature_maps.png")
+
         dec3, edge_4 = self.pred4(dec4)
         dec3 = self.upconv3(dec3)
         dec3 = torch.add(dec3, edge_dec3)
@@ -422,6 +436,8 @@ class EELUnet(nn.Module):
         # dec3 = interleave_tensors(dec3, enc3_crop, dim=1)
         dec3 = self.channel_interleave_bridge3(dec3, enc3_crop)
         dec3 = self.dec3(dec3)
+
+        visualize_feature_maps(dec3, title="Decoder 3 Feature Maps", num_cols=8, save_path="decoder_3_feature_maps.png")
 
         dec2, edge_3 = self.pred3(dec3)
         dec2 = self.upconv2(dec2)
@@ -432,6 +448,8 @@ class EELUnet(nn.Module):
         dec2 = self.channel_interleave_bridge2(dec2, enc2_crop, dim=1)
         dec2 = self.dec2(dec2)
 
+        visualize_feature_maps(dec2, title="Decoder 2 Feature Maps", num_cols=8, save_path="decoder_2_feature_maps.png")
+
         dec1, edge_2 = self.pred2(dec2)
         dec1 = self.upconv1(dec1)
         dec1 = torch.add(dec1, edge_dec1)
@@ -440,6 +458,9 @@ class EELUnet(nn.Module):
         # dec1 = interleave_tensors(dec1, enc1_crop, dim=1)
         dec1 = self.channel_interleave_bridge1(dec1, enc1_crop, dim=1)
         dec1 = self.dec1(dec1)
+
+        visualize_feature_maps(dec1, title="Decoder 1 Feature Maps", num_cols=8, save_path="decoder_1_feature_maps.png")
+
 
         seg_out, edge_1 = self.pred1(dec1)
 

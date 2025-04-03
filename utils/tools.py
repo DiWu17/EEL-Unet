@@ -9,37 +9,54 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def interleave_tensors(tensor1, tensor2, dim=0):
+def visualize_feature_maps(feature_tensor, title="Feature Maps", num_cols=8, save_path=None):
     """
-    将两个张量按照指定维度交错拼接。
+    可视化特征图
 
-    参数：
-        tensor1: 第一个输入张量
-        tensor2: 第二个输入张量
-        dim: 指定交错的维度，默认为0
-
-    返回：
-        交错拼接后的张量
-
-    要求：
-        tensor1 和 tensor2 的形状必须相同
+    参数:
+        feature_tensor (torch.Tensor): 输入特征张量，形状为 [batch_size, channels, height, width]
+        title (str): 可视化图表的标题
+        num_cols (int): 每行显示的特征图数量
+        save_path (str, optional): 如果提供，将保存图片到指定路径
     """
-    # 检查输入张量的形状是否相同
-    if tensor1.shape != tensor2.shape:
-        raise ValueError("两个张量的形状必须相同")
+    # 确保输入是 CPU 张量并转换为 numpy
+    if feature_tensor.is_cuda:
+        feature_tensor = feature_tensor.cpu()
+    feature_array = feature_tensor.detach().numpy()
 
-    # 获取张量的形状和指定维度的长度
-    shape = list(tensor1.shape)
-    dim_size = shape[dim]
+    # 获取张量维度
+    batch_size, channels, height, width = feature_array.shape
 
-    # 将两个张量沿着指定维度堆叠
-    stacked = torch.stack([tensor1, tensor2], dim=dim + 1)  # dim+1 是为了插入一个新维度用于交错
+    # 只可视化第一个 batch
+    feature_array = feature_array[0]  # [channels, height, width]
 
-    # 重塑张量，使得交错的元素按顺序排列
-    new_shape = shape[:dim] + [shape[dim] * 2] + shape[dim + 1:]
-    interleaved = stacked.reshape(new_shape)
+    # 计算需要的行数
+    num_rows = (channels + num_cols - 1) // num_cols
 
-    return interleaved
+    # 创建画布
+    fig = plt.figure(figsize=(num_cols * 2, num_rows * 2))
+    fig.suptitle(title, fontsize=16)
+
+    # 遍历所有通道
+    for i in range(channels):
+        ax = fig.add_subplot(num_rows, num_cols, i + 1)
+        # 归一化特征图以便可视化
+        feature_map = feature_array[i]
+        feature_map = (feature_map - feature_map.min()) / (feature_map.max() - feature_map.min() + 1e-8)
+
+        ax.imshow(feature_map, cmap='viridis')
+        ax.axis('off')
+        ax.set_title(f'Ch {i}', fontsize=8)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=30, bbox_inches='tight')
+        print(f"Feature maps saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
 
 
 def visualize_images(arr, title="Images"):
