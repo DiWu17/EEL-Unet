@@ -98,11 +98,11 @@ class ShiftedChannel(nn.Module):
 
 
 # 令牌化MLP块
-class PatchEmbeddingBlock(nn.Module):
+class ChannelAwarePatchedMLP(nn.Module):
     def __init__(self, in_channels, out_channels, token_dim=64):
-        super(PatchEmbeddingBlock, self).__init__()
+        super(ChannelAwarePatchedMLP, self).__init__()
         self.shift = ShiftedChannel()
-        self.to_token = nn.Conv2d(in_channels, token_dim, kernel_size=1)
+        self.to_patch = nn.Conv2d(in_channels, token_dim, kernel_size=1)
         self.channel_attention = ChannelAttention(token_dim)
         self.mlp = nn.Sequential(
             nn.Linear(token_dim, token_dim * 4),
@@ -114,7 +114,7 @@ class PatchEmbeddingBlock(nn.Module):
     def forward(self, x):
         B, C, H, W = x.shape
         x = self.shift(x)
-        x = self.to_token(x)
+        x = self.to_patch(x)
         x = self.channel_attention(x)
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, -1)
         x = self.mlp(x)
@@ -256,7 +256,7 @@ class EELUnet(nn.Module):
             nn.BatchNorm2d(512),
             nn.Conv2d(512, 1024, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            PatchEmbeddingBlock(1024, 1024),
+            ChannelAwarePatchedMLP(1024, 1024),
             nn.ReLU(inplace=True),
         )
         # self.bottleneck = self.conv_block(512, 1024)
@@ -351,7 +351,7 @@ class EELUnet(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            PatchEmbeddingBlock(out_channels, out_channels),
+            ChannelAwarePatchedMLP(out_channels, out_channels),
             # Grouped_multi_axis_Hadamard_Product_Attention(out_channels, out_channels),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
@@ -369,7 +369,7 @@ class EELUnet(nn.Module):
         # 定义上采样块，使用反卷积层
         return nn.Sequential(
             nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
-            PatchEmbeddingBlock(out_channels, out_channels),
+            ChannelAwarePatchedMLP(out_channels, out_channels),
             nn.BatchNorm2d(out_channels),
         )
 
